@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>FCCamTrax</name>
+  <description>Professional Cam Design Workbench for FreeCAD. Supports disk, cylindrical, and linear cams with multiple follower types, motion profiles, and embedded analysis charts.</description>
+  <version>0.1.0</version>
+  <maintainer>FCCamTrax Team</maintainer>
+  <license>LGPL-2.1-or-later</license>
+  <url type="repository">https://github.com/user/FCCamTrax</url>
+  <icon>resources/icons/fccamtrax.svg</icon>
+  <content>
+    <workbench>
+      <classname>FCCamTraxWorkbench</classname>
+    </workbench>
+  </content>
+</package>

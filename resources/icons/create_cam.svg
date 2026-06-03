@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Cam body -->
+  <circle cx="32" cy="36" r="20" fill="#607080" stroke="#2a3a4a" stroke-width="2"/>
+  <!-- Hub -->
+  <circle cx="32" cy="36" r="5" fill="#2a3a4a"/>
+  <!-- Keyway -->
+  <rect x="30" y="31" width="4" height="5" fill="#2a3a4a"/>
+  <!-- Pitch curve hint -->
+  <path d="M 32 16 Q 42 22, 48 30 Q 52 38, 46 48 Q 38 54, 28 50 Q 18 46, 16 38 Q 14 28, 22 20 Q 28 16, 32 16"
+        fill="none" stroke="#e04040" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <!-- Plus sign indicator (new) -->
+  <circle cx="48" cy="20" r="9" fill="#40c040" stroke="#208020" stroke-width="1.5"/>
+  <line x1="48" y1="15" x2="48" y2="25" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <line x1="43" y1="20" x2="53" y2="20" stroke="white" stroke-width="2" stroke-linecap="round"/>
+</svg>
