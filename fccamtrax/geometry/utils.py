@@ -9,17 +9,6 @@ def polar_to_cartesian(r: float, theta: float) -> tuple[float, float]:
     return r * math.cos(theta), r * math.sin(theta)
 
 
-def cartesian_to_polar(x: float, y: float) -> tuple[float, float]:
-    """Convert Cartesian (x, y) to polar (r, theta)."""
-    return math.sqrt(x*x + y*y), math.atan2(y, x)
-
-
-def angle_range_degrees(n_points: int) -> list[float]:
-    """Generate angle list in degrees from 0 to 360 (exclusive of 360 if n_points > 360)."""
-    step = 360.0 / n_points
-    return [i * step for i in range(n_points)]
-
-
 def offset_curve(points: list[tuple[float, float]],
                  offset: float,
                  closed: bool = True) -> list[tuple[float, float]]:
@@ -63,6 +52,7 @@ def offset_curve(points: list[tuple[float, float]],
 def compute_curvature(points: list[tuple[float, float]]) -> list[float]:
     """Compute signed curvature at each point of a 2D curve.
 
+    Uses Menger curvature: κ = 2·|cross| / (|p0p1|·|p1p2|·|p0p2|)
     Positive = CCW, Negative = CW.
     """
     n = len(points)
@@ -78,15 +68,14 @@ def compute_curvature(points: list[tuple[float, float]]) -> list[float]:
         dy2 = p2[1] - p1[1]
 
         cross = dx1 * dy2 - dy1 * dx2
-        dot = dx1 * dx2 + dy1 * dy2
         ds1 = math.sqrt(dx1*dx1 + dy1*dy1)
         ds2 = math.sqrt(dx2*dx2 + dy2*dy2)
+        ds3 = math.sqrt((p2[0]-p0[0])**2 + (p2[1]-p0[1])**2)
 
-        if ds1 < 1e-12 or ds2 < 1e-12:
+        denom = ds1 * ds2 * ds3
+        if denom < 1e-12:
             curvatures.append(0.0)
         else:
-            # kappa = cross / (ds1 * ds2 * ds_avg) for curvature radius
-            ds_avg = (ds1 + ds2) / 2
-            curvatures.append(cross / (ds_avg**3 / ds_avg))
+            curvatures.append(2.0 * cross / denom)
 
     return curvatures

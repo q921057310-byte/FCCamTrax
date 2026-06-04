@@ -127,4 +127,4 @@ class CylindricalCamBuilder(CamBuilder):
         return result
 
 
-CamBuilderFactory.register("cylindrical", CylindricalCamBuilder)
+

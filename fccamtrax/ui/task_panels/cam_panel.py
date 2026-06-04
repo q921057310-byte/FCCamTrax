@@ -8,6 +8,7 @@ import FreeCADGui as Gui
 from ...motion.registry import list_all as list_motion_profiles, get as get_motion
 from ...geometry.follower import CamParams, FollowerParams, FollowerType, MotionSegment
 from ...geometry.base import CamBuilderFactory
+from ...chart.preview import CamPreviewWidget
 
 _MOTION_CN: dict[str, str] = {
     "Cycloidal": "摆线运动",
@@ -187,6 +188,8 @@ class SegmentEditorDialog:
                 sl = float(self.table.item(row, 2).text())
                 el = float(self.table.item(row, 3).text())
             except (ValueError, AttributeError):
+                App.Console.PrintWarning(
+                    f"FCCamTrax: 第 {row + 1} 行数据无效，已跳过。\n")
                 continue
             combo = self.table.cellWidget(row, 4)
             mn = combo.currentText() if combo else "摆线运动"
@@ -235,8 +238,7 @@ class CamTaskPanel:
         self.spin_thickness = self._make_spin(15.0, 1.0, 200.0, "mm")
         self.spin_hub_radius = self._make_spin(12.0, 0.0, 100.0, "mm")
         self.spin_bore_radius = self._make_spin(8.0, 0.0, 100.0, "mm")
-        self.spin_keyway_width = self._make_spin(4.0, 0.0, 50.0, "mm")
-        self.spin_ppd = self._make_spin(5.0, 1.0, 20.0, "点/度")
+        self.spin_ppd = self._make_spin(1.0, 1.0, 20.0, "点/度")
         self.spin_groove_width = self._make_spin(6.0, 2.0, 50.0, "mm")
         self.spin_groove_depth = self._make_spin(4.0, 1.0, 30.0, "mm")
         self.spin_blank_radius = self._make_spin(60.0, 10.0, 500.0, "mm")
@@ -246,7 +248,6 @@ class CamTaskPanel:
         gl.addRow("凸轮厚度:", self.spin_thickness)
         gl.addRow("轮毂半径:", self.spin_hub_radius)
         gl.addRow("轴孔半径:", self.spin_bore_radius)
-        gl.addRow("键槽宽度:", self.spin_keyway_width)
         gl.addRow("", self.check_grooved)
         gl.addRow("沟槽宽度:", self.spin_groove_width)
         gl.addRow("沟槽深度:", self.spin_groove_depth)
@@ -268,22 +269,64 @@ class CamTaskPanel:
         seg_layout.addStretch()
         layout.addWidget(group_seg)
 
-        # ── 从动件 ──
+        # ── 设计检查按钮 ──
+        btn_check = QW.QPushButton("设计检查...")
+        btn_check.clicked.connect(self._open_design_check)
+        layout.addWidget(btn_check)
+
+        # ── 从动件 + 预览 并排 ──
+        preview_row = QW.QHBoxLayout()
+
+        # 左侧：从动件选项
         group_follower = QW.QGroupBox("从动件")
-        gl = QW.QFormLayout(group_follower)
+        fl = QW.QFormLayout(group_follower)
         self.combo_follower_type = QW.QComboBox()
         self.combo_follower_type.addItems([
             "直动对心", "直动偏置", "摆动", "双从动件", "共轭",
         ])
         self.combo_follower_type.currentIndexChanged.connect(self._on_follower_type_changed)
-        gl.addRow("类型:", self.combo_follower_type)
+        fl.addRow("类型:", self.combo_follower_type)
         self.spin_offset = self._make_spin(0.0, -100.0, 100.0, "mm")
-        self.spin_arm_length = self._make_spin(40.0, 1.0, 500.0, "mm")
-        self.spin_pivot_distance = self._make_spin(60.0, 1.0, 500.0, "mm")
-        gl.addRow("偏置距:", self.spin_offset)
-        gl.addRow("摆臂长度:", self.spin_arm_length)
-        gl.addRow("摆臂支距:", self.spin_pivot_distance)
-        layout.addWidget(group_follower)
+        self.spin_arm_length = self._make_spin(60.0, 1.0, 500.0, "mm")
+        self.spin_pivot_x = self._make_spin(60.0, -500.0, 500.0, "mm")
+        self.spin_pivot_y = self._make_spin(0.0, -500.0, 500.0, "mm")
+        self.spin_initial_angle = self._make_spin(151.0, 0.0, 360.0, "°")
+        fl.addRow("偏置距:", self.spin_offset)
+        fl.addRow("摆臂长度:", self.spin_arm_length)
+        fl.addRow("支点 X:", self.spin_pivot_x)
+        fl.addRow("支点 Y:", self.spin_pivot_y)
+        fl.addRow("初始角度:", self.spin_initial_angle)
+        preview_row.addWidget(group_follower)
+
+        # 右侧：预览
+        preview_col = QW.QVBoxLayout()
+        self._preview = CamPreviewWidget()
+        self._preview.setMinimumHeight(200)
+        preview_col.addWidget(self._preview)
+
+        slider_layout = QW.QHBoxLayout()
+        self._btn_play = QW.QPushButton("▶")
+        self._btn_play.setCheckable(True)
+        self._btn_play.setFixedWidth(40)
+        self._btn_play.toggled.connect(self._on_play_toggled)
+        slider_layout.addWidget(self._btn_play)
+
+        self._slider_angle = QW.QSlider(self.QtCore.Qt.Horizontal)
+        self._slider_angle.setRange(0, 360)
+        self._slider_angle.setValue(0)
+        self._slider_angle.setTickPosition(QW.QSlider.TicksBelow)
+        self._slider_angle.setTickInterval(10)
+        self._slider_angle.valueChanged.connect(self._on_angle_changed)
+        slider_layout.addWidget(self._slider_angle, 1)
+
+        self._lbl_angle = QW.QLabel("0°")
+        self._lbl_angle.setMinimumWidth(40)
+        slider_layout.addWidget(self._lbl_angle)
+
+        preview_col.addLayout(slider_layout)
+        preview_row.addLayout(preview_col, 1)
+
+        layout.addLayout(preview_row)
 
         # ── 按钮 ──
         btn_layout = QW.QHBoxLayout()
@@ -301,6 +344,22 @@ class CamTaskPanel:
         self._on_cam_type_changed(0)
         self._cam_params = None
         self._follower_params = None
+        self._cached_builder = None
+
+        # 动画定时器
+        self._anim_timer = self.QtCore.QTimer()
+        self._anim_timer.setInterval(30)  # ~33fps
+        self._anim_timer.timeout.connect(self._on_anim_tick)
+
+        # 参数变化 → 刷新预览
+        for spin in [self.spin_base_radius, self.spin_offset,
+                     self.spin_arm_length, self.spin_pivot_x, self.spin_pivot_y,
+                     self.spin_initial_angle]:
+            spin.valueChanged.connect(self._update_preview)
+        self.combo_follower_type.currentIndexChanged.connect(self._update_preview)
+
+        # 初始刷新
+        self._update_preview()
 
     def _make_spin(self, default, min_val, max_val, suffix=""):
         spin = self.QtWidgets.QDoubleSpinBox()
@@ -334,14 +393,130 @@ class CamTaskPanel:
         is_oscillating = (index == 2)
         self.spin_offset.setVisible(is_offcenter)
         self.spin_arm_length.setVisible(is_oscillating)
-        self.spin_pivot_distance.setVisible(is_oscillating)
+        self.spin_pivot_x.setVisible(is_oscillating)
+        self.spin_pivot_y.setVisible(is_oscillating)
+        self.spin_initial_angle.setVisible(is_oscillating)
+
+    def _compute_design_check(self):
+        """计算当前设计参数，返回 (pa, swing, recommended_text)。"""
+        rb = self.spin_base_radius.value()
+        max_lift = max((s.end_lift for s in self._segments), default=0.0)
+        ft_idx = self.combo_follower_type.currentIndex()
+        pa = None
+        swing = None
+        rec_lines = []
+        max_lift_ok = max_lift > 0
+
+        # 用 builder 算实际最大压力角
+        actual_pa = None
+        builder = self._get_builder()
+        if builder:
+            try:
+                pas = builder.pressure_angles()
+                if pas:
+                    actual_pa = max(pas)
+            except Exception:
+                pass
+
+        if ft_idx == 0:  # 直动对心
+            if actual_pa is not None:
+                pa = actual_pa
+            elif max_lift_ok and rb > 0:
+                pa = math.degrees(math.atan2(max_lift, rb))
+            if rb > 0 and max_lift_ok:
+                rb_rec = max_lift / math.tan(math.radians(30))
+                rec_lines.append(f"• 建议基圆半径 ≥ {rb_rec:.1f} mm（目标压力角 ≤ 30°）")
+            if pa is not None:
+                rec_lines.append(f"• 压力角 ≤ 30°，当前 {pa:.1f}°" if pa <= 30 else
+                                 f"• ⚠ 压力角 {pa:.1f}° > 30°，请增大基圆半径")
+
+        elif ft_idx == 1:  # 直动偏置
+            if actual_pa is not None:
+                pa = actual_pa
+            else:
+                e = abs(self.spin_offset.value())
+                if max_lift_ok and rb > e:
+                    d = math.sqrt((rb + max_lift)**2 - e**2)
+                    pa = math.degrees(math.atan2(max_lift, d))
+            rec_lines.append(f"• 建议减小偏置距或增大基圆半径")
+            if pa:
+                rec_lines.append(f"• 压力角 ≤ 30°，当前 {pa:.1f}°" if pa <= 30 else
+                                 f"• ⚠ 压力角 {pa:.1f}° > 30°，请增大基圆半径或减小偏置")
+
+        elif ft_idx == 2:  # 摆动
+            L = self.spin_arm_length.value()
+            px = self.spin_pivot_x.value()
+            py = self.spin_pivot_y.value()
+            d_pivot = math.sqrt(px**2 + py**2)
+
+            if L > 0 and d_pivot > 0:
+                alpha = math.atan2(py, px)
+                cos_val = (rb**2 - d_pivot**2 - L**2) / (2 * L * d_pivot)
+                if abs(cos_val) <= 1.0:
+                    psi0 = alpha + math.acos(cos_val)
+                    self.spin_initial_angle.setValue(math.degrees(psi0) % 360)
+
+                if max_lift_ok:
+                    swing = math.degrees(max_lift / L)
+
+            if actual_pa is not None:
+                pa = actual_pa
+            elif L > rb:
+                pa = math.degrees(math.atan2(max_lift if max_lift_ok else 1, L - rb))
+            else:
+                pa = 90.0
+
+            L_rec = max(3 * max_lift, 1.5 * rb) if max_lift_ok else 1.5 * rb
+            rec_lines.append(f"• 建议摆臂长度 ≥ {L_rec:.1f} mm（当前 {L:.1f} mm）")
+            if L < L_rec:
+                rec_lines.append(f"  ⚠ 摆臂偏短，建议增大")
+            if pa:
+                rec_lines.append(f"• 压力角 ≤ 30°，当前 {pa:.1f}°" if pa <= 30 else
+                                 f"• ⚠ 压力角 {pa:.1f}° > 30°，请增大摆臂长度或基圆半径")
+            if swing is not None:
+                rec_lines.append(f"• 最大摆角 ≈ {swing:.1f}°")
+        else:
+            rec_lines.append("• 暂不支持该从动件类型的设计检查")
+
+        return pa, swing, rec_lines
+
+    def _open_design_check(self):
+        """弹出设计检查对话框。"""
+        QW = self.QtWidgets
+        pa, swing, rec_lines = self._compute_design_check()
+        msg = QW.QMessageBox(self.form)
+        msg.setWindowTitle("设计检查")
+        msg.setIcon(QW.QMessageBox.Information)
+
+        text = ""
+
+        # 压力角
+        if pa is not None:
+            if pa <= 20:
+                color = "绿色"
+            elif pa <= 30:
+                color = "橙色"
+            else:
+                color = "红色"
+            text += f"压力角：{pa:.1f}°（{color}）\n"
+        if swing is not None:
+            text += f"最大摆角：{swing:.1f}°\n"
+
+        text += "\n设计建议：\n" + "\n".join(rec_lines)
+        msg.setText(text)
+
+        # 颜色提示
+        if pa is not None and pa > 30:
+            msg.setIcon(QW.QMessageBox.Warning)
+
+        msg.exec()
 
     def _on_cam_type_changed(self, index):
         is_disk = (index == 0)
         is_cyl = (index == 1)
         is_linear = (index == 2)
         self.spin_hub_radius.setVisible(is_disk)
-        self.spin_keyway_width.setVisible(is_disk)
+        self.spin_bore_radius.setVisible(is_disk)
         self.spin_thickness.setVisible(is_disk or is_linear)
         # 显示/隐藏开槽选项
         self.check_grooved.setVisible(is_disk or is_linear)
@@ -380,7 +555,6 @@ class CamTaskPanel:
             thickness=self.spin_thickness.value(),
             hub_radius=self.spin_hub_radius.value(),
             bore_radius=self.spin_bore_radius.value(),
-            keyway_width=self.spin_keyway_width.value(),
             points_per_degree=self.spin_ppd.value(),
             grooved=is_cyl or self.check_grooved.isChecked(),
             groove_width=self.spin_groove_width.value(),
@@ -402,10 +576,27 @@ class CamTaskPanel:
                                      FollowerType.TRANSLATING_ONCENTER),
             offset=self.spin_offset.value(),
             arm_length=self.spin_arm_length.value(),
-            pivot_distance=self.spin_pivot_distance.value(),
+            pivot_x=self.spin_pivot_x.value(),
+            pivot_y=self.spin_pivot_y.value(),
+            initial_angle=self.spin_initial_angle.value(),
         )
 
         return cam, follower
+
+    def _get_builder(self):
+        """获取缓存的 builder（参数变化时清除）。"""
+        if self._cached_builder is None:
+            try:
+                cam, follower = self._build_params()
+                self._cached_builder = CamBuilderFactory.create(
+                    cam.cam_type, cam, follower)
+            except Exception:
+                return None
+        return self._cached_builder
+
+    def _invalidate_builder_cache(self):
+        """参数变化时清除缓存。"""
+        self._cached_builder = None
 
     def _validate(self):
         segments = self._segments
@@ -434,6 +625,57 @@ class CamTaskPanel:
                     f"≠ 第 {i + 2} 段起始角 ({segments[i + 1].start_angle}°)"
                 )
                 return False
+
+        # 滚子半径检查
+        rb = self.spin_base_radius.value()
+        roller_r = 5.0
+        try:
+            _, follower = self._build_params()
+            roller_r = follower.roller_radius
+        except Exception:
+            pass
+        if roller_r > 0 and roller_r >= rb:
+            self.QtWidgets.QMessageBox.warning(
+                self.form, "设计警告",
+                f"滚子半径 ({roller_r:.1f} mm) ≥ 基圆半径 ({rb:.1f} mm)，"
+                f"轮廓会穿到对面，请增大基圆半径或减小滚子。"
+            )
+
+        # 压力角检查
+        actual_pa = None
+        builder = self._get_builder()
+        if builder:
+            try:
+                pas = builder.pressure_angles()
+                if pas:
+                    actual_pa = max(pas)
+            except Exception:
+                pass
+
+        max_lift = max((s.end_lift for s in segments), default=0.0)
+        ft_idx = self.combo_follower_type.currentIndex()
+        pa = actual_pa
+        if pa is None:
+            if ft_idx == 0:  # 直动对心
+                if max_lift > 0 and rb > 0:
+                    pa = math.degrees(math.atan2(max_lift, rb))
+            elif ft_idx == 1:  # 直动偏置
+                e = abs(self.spin_offset.value())
+                if max_lift > 0 and rb > e:
+                    d = math.sqrt((rb + max_lift)**2 - e**2)
+                    pa = math.degrees(math.atan2(max_lift, d))
+            elif ft_idx == 2:  # 摆动
+                L = self.spin_arm_length.value()
+                if max_lift > 0 and L > rb:
+                    pa = math.degrees(math.atan2(max_lift, L - rb))
+                elif max_lift > 0:
+                    pa = 90.0
+        if pa is not None and pa > 30:
+            self.QtWidgets.QMessageBox.warning(
+                self.form, "设计警告",
+                f"最大压力角 ≈ {pa:.1f}° > 30°，建议调整参数。"
+            )
+
         return True
 
     def _on_generate(self):
@@ -455,7 +697,11 @@ class CamTaskPanel:
             obj.ViewObject.ShapeColor = cam.color
 
             pitch_points = builder.pitch_curve_points()
-            pts2 = [App.Vector(p[0], p[1], cam.thickness + 1) for p in pitch_points]
+            z_off = cam.thickness + 1 if cam.cam_type != "cylindrical" else 0
+            if cam.cam_type == "cylindrical":
+                pts2 = [App.Vector(p[0], p[1], p[2]) for p in pitch_points]
+            else:
+                pts2 = [App.Vector(p[0], p[1], z_off) for p in pitch_points]
             import Part
             spline2 = Part.BSplineCurve()
             spline2.approximate(pts2, Tolerance=0.001, DegMax=6)
@@ -471,6 +717,7 @@ class CamTaskPanel:
             self._cam_params = cam
             self._follower_params = follower
             self.btn_analyze.setEnabled(True)
+            self._update_preview()
 
             App.Console.PrintMessage("FCCamTrax: 凸轮生成成功。\n")
 
@@ -516,6 +763,28 @@ class CamTaskPanel:
             )
             App.Console.PrintError(f"FCCamTrax: {e}\n")
 
+    # ── 机构预览 ──
+
+    def _on_angle_changed(self, angle: int):
+        self._lbl_angle.setText(f"{angle}°")
+        self._preview.set_cam_angle(float(angle))
+
+    def _on_play_toggled(self, playing: bool):
+        if playing:
+            self._anim_timer.start()
+        else:
+            self._anim_timer.stop()
+
+    def _on_anim_tick(self):
+        v = (self._slider_angle.value() + 2) % 360
+        self._slider_angle.setValue(v)
+
+    def _update_preview(self):
+        """刷新预览（参数变化后调用）。始终从控件读取最新参数。"""
+        self._invalidate_builder_cache()
+        cam, follower = self._build_params()
+        self._preview.set_params(cam, follower)
+
     def getStandardButtons(self):
         b = self.QtWidgets.QDialogButtonBox
         val = getattr(b.Close, 'value', b.Close)
@@ -524,4 +793,5 @@ class CamTaskPanel:
     def reject(self):
         if self._analysis_panel:
             self._analysis_panel.close()
+        self._anim_timer.stop()
         Gui.Control.closeDialog()

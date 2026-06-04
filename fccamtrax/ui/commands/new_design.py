@@ -6,8 +6,8 @@ import FreeCADGui as Gui
 
 
 def _icon(name):
-    base = os.path.join(App.getUserAppDataDir(), "Mod", "FCCamTrax", "resources", "icons")
-    return os.path.join(base, name)
+    base = os.path.join(os.path.dirname(__file__), "..", "..", "..", "resources", "icons")
+    return os.path.normpath(os.path.join(base, name))
 
 
 class NewCamDesignCommand:

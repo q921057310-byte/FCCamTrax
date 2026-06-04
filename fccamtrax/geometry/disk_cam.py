@@ -10,7 +10,7 @@ import FreeCAD as App
 import Part
 from .base import CamBuilder, CamBuilderFactory
 from .follower import CamParams, FollowerParams, FollowerType
-from .utils import polar_to_cartesian, offset_curve
+from .utils import polar_to_cartesian
 
 
 class DiskCamBuilder(CamBuilder):
@@ -54,10 +54,9 @@ class DiskCamBuilder(CamBuilder):
     def _pitch_translating_offcenter(self) -> list[tuple[float, float]]:
         """Eccentric translating follower.
 
-        The pitch curve in polar (relative to cam center):
-          ψ(θ) = arctan(e / sqrt((r_b + h(θ))^2 - e^2)) + θ
-          R(θ) = sqrt((r_b + h(θ))^2 - e^2) / cos(ψ(θ) - θ)
-        where e = offset (eccentricity).
+        从动件导路在 X=e 处（垂直方向），
+        滚子中心沿导路移动距离 d = sqrt((rb+h)² - e²)，
+        凸轮固连系坐标 = 旋转 (e, d) 向量 -θ 角度。
         """
         lifts = self._motion_lifts(self._n_points)
         rb = self.cam.base_radius
@@ -68,26 +67,26 @@ class DiskCamBuilder(CamBuilder):
             theta = 2 * math.pi * i / self._n_points
             r_pitch = rb + h
             if r_pitch <= abs(e):
-                r_pitch = abs(e) + 0.01  # prevent sqrt of negative
-            # Distance from cam center to follower center line intersection
+                r_pitch = abs(e) + 0.01
             d = math.sqrt(r_pitch**2 - e**2)
-            # Angle offset due to eccentricity
-            psi = math.atan2(e, d)
-            angle = theta + psi
-            R = d / math.cos(psi)
-            points.append(polar_to_cartesian(R, angle))
+            # 在凸轮固连系中，导路在 X=e 处垂直。
+            # 滚子中心在 (e, d)，旋转 -θ 得凸轮固连坐标
+            xc = e * math.cos(theta) + d * math.sin(theta)
+            yc = -e * math.sin(theta) + d * math.cos(theta)
+            points.append((xc, yc))
         return points
 
     def _pitch_oscillating(self) -> list[tuple[float, float]]:
         """Oscillating (swinging arm) follower.
 
-        支点 P 固定在凸轮上方的 (0, d) 处。
+        支点 P 固定在空间 (pivot_x, pivot_y) 处。
         臂长 l，臂角 ψ(θ) = ψ₀ + h(θ)/l。
         滚子中心世界坐标 → 旋转 -θ 到凸轮固连系。
         """
         lifts = self._motion_lifts(self._n_points)
         l = self.follower.arm_length
-        d = self.follower.pivot_distance
+        px = self.follower.pivot_x
+        py = self.follower.pivot_y
         psi0 = math.radians(self.follower.initial_angle)
 
         points = []
@@ -95,8 +94,6 @@ class DiskCamBuilder(CamBuilder):
             theta = 2 * math.pi * i / self._n_points
             # 臂角
             psi = psi0 + h / l
-            # 固定支点（Y 轴正上方）
-            px, py = 0.0, d
             # 滚子中心世界坐标
             rx = px + l * math.cos(psi)
             ry = py + l * math.sin(psi)
@@ -111,20 +108,65 @@ class DiskCamBuilder(CamBuilder):
     # ──────────────────────────────────────────────
 
     def profile_curve_points(self) -> list[tuple[float, float]]:
-        """Compute actual cam profile offset by roller radius."""
+        """Compute actual cam profile offset by roller radius.
+
+        沿切线法线方向偏移 roller_r（对所有曲线形状正确）。
+        """
         pitch = self.pitch_curve_points()
         roller_r = self.follower.roller_radius
         if roller_r <= 0:
             return pitch  # knife-edge follower, no offset
-        # Offset inward (negative = toward cam center)
-        return offset_curve(pitch, -roller_r, closed=True)
+        n = len(pitch)
+        if n < 3:
+            return pitch
+        result = []
+        for i in range(n):
+            px, py = pitch[i]
+            p_prev = pitch[(i - 1) % n]
+            p_next = pitch[(i + 1) % n]
+            tx = p_next[0] - p_prev[0]
+            ty = p_next[1] - p_prev[1]
+            tl = math.sqrt(tx * tx + ty * ty)
+            if tl < 1e-12:
+                result.append((px, py))
+                continue
+            # 法线方向（90° CCW 旋转切线）
+            nx, ny = -ty / tl, tx / tl
+            # 确保法线指向中心（点积 < 0 表示指向内）
+            if px * nx + py * ny > 0:
+                nx, ny = -nx, -ny
+            # 向内偏移：法线已指向中心，加上 roller_r 即向内
+            result.append((px + roller_r * nx, py + roller_r * ny))
+        return result
 
     def _conjugate_profile_points(self) -> list[tuple[float, float]]:
-        """Compute conjugate (complementary) profile for conjugate follower."""
+        """Compute conjugate (complementary) profile for conjugate follower.
+
+        沿切线法线方向远离中心偏移。
+        """
         pitch = self.pitch_curve_points()
         roller_r = self.follower.conjugate_roller_radius
-        # Offset outward for the conjugate path
-        return offset_curve(pitch, roller_r, closed=True)
+        n = len(pitch)
+        if n < 3:
+            return pitch
+        result = []
+        for i in range(n):
+            px, py = pitch[i]
+            p_prev = pitch[(i - 1) % n]
+            p_next = pitch[(i + 1) % n]
+            tx = p_next[0] - p_prev[0]
+            ty = p_next[1] - p_prev[1]
+            tl = math.sqrt(tx * tx + ty * ty)
+            if tl < 1e-12:
+                result.append((px, py))
+                continue
+            nx, ny = -ty / tl, tx / tl
+            # 确保法线远离中心（点积 > 0 表示指向外）
+            if px * nx + py * ny < 0:
+                nx, ny = -nx, -ny
+            # 向外偏移：法线已远离中心，加上 roller_r 即向外
+            result.append((px + roller_r * nx, py + roller_r * ny))
+        return result
 
     # ──────────────────────────────────────────────
     # Pressure angle
@@ -133,15 +175,15 @@ class DiskCamBuilder(CamBuilder):
     def pressure_angles(self) -> list[float]:
         """Compute pressure angle at each cam angle.
 
-        For translating follower:
-          α(θ) = arctan((dh/dθ - e) / (r_b + h(θ)))
-        where e = 0 for on-center, e = offset for off-center.
+        直动从动件：α = arctan(|dh/dθ - e| / sqrt((rb+h)² - e²))
+        摆动从动件：α = arctan(|L·dψ/dθ| / (rb+h))
         """
         n = self._n_points
         lifts = self._motion_lifts(n)
         rb = self.cam.base_radius
-        e = self.follower.offset if self.follower.follower_type == \
-            FollowerType.TRANSLATING_OFFCENTER else 0.0
+        ft = self.follower.follower_type
+        e = self.follower.offset if ft == FollowerType.TRANSLATING_OFFCENTER else 0.0
+        L = self.follower.arm_length if ft == FollowerType.OSCILLATING else 0.0
 
         dtheta = 2 * math.pi / n
         pressures = []
@@ -150,10 +192,25 @@ class DiskCamBuilder(CamBuilder):
             idx_next = (i + 1) % n
             dh_dtheta = (lifts[idx_next] - lifts[i]) / dtheta
             h = lifts[i]
-            denom = rb + h
-            if denom < 1e-6:
-                denom = 1e-6
-            alpha = math.atan2(abs(dh_dtheta - e), denom)
+            r_pitch = rb + h
+
+            if ft == FollowerType.OSCILLATING:
+                # 摆动：tan(α) = |L·dψ/dθ| / (rb+h)
+                # ψ = ψ₀ + h/L → dψ/dθ = (1/L)·dh/dθ
+                if L > 1e-6:
+                    dpsi_dtheta = dh_dtheta / L
+                    denom = max(r_pitch, 1e-6)
+                    alpha = math.atan2(abs(L * dpsi_dtheta), denom)
+                else:
+                    alpha = math.pi / 2
+            elif e != 0.0:
+                # 偏置直动
+                denom = math.sqrt(max(r_pitch**2 - e**2, 1e-12))
+                alpha = math.atan2(abs(dh_dtheta - e), denom)
+            else:
+                # 对心直动
+                denom = max(r_pitch, 1e-6)
+                alpha = math.atan2(abs(dh_dtheta), denom)
             pressures.append(math.degrees(alpha))
 
         return pressures
@@ -188,7 +245,7 @@ class DiskCamBuilder(CamBuilder):
             spline = Part.BSplineCurve()
             spline.interpolate(pts, PeriodicFlag=True)
             wire = Part.Wire(spline.toShape())
-        except Exception:
+        except (Part.OCCError, RuntimeError):
             pts.append(pts[0])
             spline = Part.BSplineCurve()
             spline.interpolate(pts)
@@ -200,20 +257,18 @@ class DiskCamBuilder(CamBuilder):
     def _build_grooved(self):
         """Face-groove disk cam.
 
-        和圆柱凸轮完全同构：
-        72 个矩形截面 → Part.makeLoft(solid, closed) → blank.cut(groove)
-
-        关键区别（vs 圆柱）：
-        圆柱：r 固定，Z 随 lift 变
-        盘形：Z 固定，r 随 lift 变（r = base_radius + lift）
+        用 pitch_curve_points() 实际坐标构建槽，
+        槽壁沿切线法线方向偏移 ±gw/2（对所有从动件类型正确）。
         """
-        R = self.cam.base_radius
         gw = self.cam.groove_width
         gd = self.cam.groove_depth
         hw = gw / 2.0
         clearance = 1.0
 
-        n = self._n_points
+        pitch = self.pitch_curve_points()
+        n = len(pitch)
+        if n < 3:
+            raise RuntimeError("Too few pitch points for grooved cam")
         n_loft = min(n, 72)
         step = max(1, n // n_loft)
 
@@ -221,20 +276,33 @@ class DiskCamBuilder(CamBuilder):
         sections = []
         for i in range(n_loft):
             idx = (i * step) % n
-            theta = 2 * math.pi * idx / n
-            lift = self._lift_at(idx / n * 360.0, self.cam.segments)
-            r = R + lift
-            if r + hw > max_r:
-                max_r = r + hw
+            idx_prev = (idx - step) % n
+            idx_next = (idx + step) % n
+            px, py = pitch[idx]
+            p_prev = pitch[idx_prev]
+            p_next = pitch[idx_next]
 
-            c = math.cos(theta)
-            s = math.sin(theta)
+            # 切线方向
+            tx = p_next[0] - p_prev[0]
+            ty = p_next[1] - p_prev[1]
+            tl = math.sqrt(tx * tx + ty * ty)
+            if tl < 1e-12:
+                continue
+            # 法线方向（垂直于切线）
+            nx, ny = -ty / tl, tx / tl
+
+            ox = px + hw * nx
+            oy = py + hw * ny
+            ix = px - hw * nx
+            iy = py - hw * ny
+            max_r = max(max_r, math.sqrt(ox**2 + oy**2))
+
             pts = [
-                App.Vector((r + hw) * c, (r + hw) * s, -clearance),
-                App.Vector((r - hw) * c, (r - hw) * s, -clearance),
-                App.Vector((r - hw) * c, (r - hw) * s, gd),
-                App.Vector((r + hw) * c, (r + hw) * s, gd),
-                App.Vector((r + hw) * c, (r + hw) * s, -clearance),
+                App.Vector(ox, oy, -clearance),
+                App.Vector(ix, iy, -clearance),
+                App.Vector(ix, iy, gd),
+                App.Vector(ox, oy, gd),
+                App.Vector(ox, oy, -clearance),
             ]
             sections.append(Part.makePolygon(pts))
 

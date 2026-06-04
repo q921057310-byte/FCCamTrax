@@ -10,7 +10,6 @@ import FreeCAD as App
 import Part
 from .base import CamBuilder, CamBuilderFactory
 from .follower import CamParams, FollowerParams
-from .utils import offset_curve
 
 
 class LinearCamBuilder(CamBuilder):
@@ -25,23 +24,30 @@ class LinearCamBuilder(CamBuilder):
     # ──────────────────────────────────────────────
 
     def pitch_curve_points(self) -> list[tuple[float, float]]:
-        """展开升程曲线：x = R·θ, y = h(θ)。"""
+        """展开升程曲线：x = R·θ, y = h(θ)。
+
+        包含起点 (0°) 和终点 (360°)，确保首尾衔接。
+        """
         lifts = self._motion_lifts(self._n_points)
         R = self.cam.base_radius
         points = []
         for i, h in enumerate(lifts):
             theta_rad = 2 * math.pi * i / self._n_points
-            x = R * theta_rad  # 弧长 = R·θ
+            x = R * theta_rad
             points.append((x, h))
+        # 补上终点 360°（升程应与 0° 一致）
+        h_end = self._lift_at(360.0, self.cam.segments)
+        points.append((R * 2 * math.pi, h_end))
         return points
 
     def profile_curve_points(self) -> list[tuple[float, float]]:
-        """线性凸轮轮廓 = 升程曲线偏移滚子半径。"""
+        """线性凸轮轮廓 = 升程曲线本身（无需偏移）。
+
+        线性凸轮是展开的 2D 视图，滚子沿轮廓表面运动，
+        轮廓即为升程曲线。去掉重复终点 (360°=0°)。
+        """
         pitch = self.pitch_curve_points()
-        roller_r = self.follower.roller_radius
-        if roller_r <= 0:
-            return pitch
-        return offset_curve(pitch, -roller_r, closed=False)
+        return pitch[:-1]
 
     def pressure_angles(self) -> list[float]:
         """线性凸轮压力角：α(θ) = arctan((dh/dθ) / R)。"""
@@ -129,7 +135,14 @@ class LinearCamBuilder(CamBuilder):
             top_pts.insert(0, App.Vector(0, sampled[0][1] + base_h, 0))
 
         spline = Part.BSplineCurve()
-        spline.interpolate(top_pts)
+        try:
+            spline.interpolate(top_pts)
+        except (Part.OCCError, RuntimeError):
+            if len(top_pts) > 2:
+                top_pts.pop()
+                spline.interpolate(top_pts)
+            else:
+                raise
         top_edge = spline.toShape()
 
         # 三条直边：右 → 下 → 左
@@ -156,10 +169,13 @@ class LinearCamBuilder(CamBuilder):
 
         lifts = [h for _, h in pitch]
         max_lift = max(lifts) if lifts else 0.0
+        half_gw = gw / 2.0
 
-        block_h = base_h + max_lift + gw + cleft
+        block_bottom = -half_gw - cleft
+        block_top = max_lift + half_gw + cleft
+        block_h = block_top - block_bottom
         block = Part.makeBox(L + 2 * cleft, block_h, base_h,
-                             App.Vector(-cleft, -gw - cleft, 0))
+                             App.Vector(-cleft, block_bottom, 0))
 
         if len(pitch) > 2:
             step = max(1, len(pitch) // 90)
@@ -171,11 +187,11 @@ class LinearCamBuilder(CamBuilder):
             for i in indices:
                 x, h = pitch[i]
                 pts = [
-                    App.Vector(x, h, 0.0),
-                    App.Vector(x, h, gd),
-                    App.Vector(x, h - gw, gd),
-                    App.Vector(x, h - gw, 0.0),
-                    App.Vector(x, h, 0.0),
+                    App.Vector(x, h + half_gw, base_h),
+                    App.Vector(x, h + half_gw, base_h - gd),
+                    App.Vector(x, h - half_gw, base_h - gd),
+                    App.Vector(x, h - half_gw, base_h),
+                    App.Vector(x, h + half_gw, base_h),
                 ]
                 sections.append(Part.makePolygon(pts))
 
@@ -185,5 +201,4 @@ class LinearCamBuilder(CamBuilder):
         return block
 
 
-# 注册构建器
-CamBuilderFactory.register("linear", LinearCamBuilder)
+# 注册由 base.py._lazy_import_builders 统一管理

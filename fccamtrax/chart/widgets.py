@@ -78,8 +78,9 @@ class _PlotWidget(QtWidgets.QWidget):
             self._draw_axes(painter)
             self._draw_grid(painter)
             self._draw_curve(painter)
-        except Exception:
-            pass
+        except Exception as e:
+            import FreeCAD as App
+            App.Console.PrintError(f"FCCamTrax: chart paint error: {e}\n")
         finally:
             painter.end()
 
@@ -156,7 +157,8 @@ class _PlotWidget(QtWidgets.QWidget):
             painter.drawLine(x0, int(y), x0 + w, int(y))
 
     def _draw_curve(self, painter):
-        if not self._data or not self._angles:
+        n = min(len(self._data), len(self._angles))
+        if n == 0:
             return
         x0, y0, w, h = self._plot_area()
         y_min, y_max = self._data_range()
@@ -166,7 +168,7 @@ class _PlotWidget(QtWidgets.QWidget):
 
         path = QtGui.QPainterPath()
         first = True
-        for i in range(len(self._angles)):
+        for i in range(n):
             val = self._data[i]
             if not math.isfinite(val):
                 first = True

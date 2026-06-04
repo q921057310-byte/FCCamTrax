@@ -44,12 +44,16 @@ class CamBuilder(ABC):
         """压力角（默认返回空列表，子类可覆盖）。"""
         return []
 
+    def motion_lifts(self, n_points: int = 360) -> list[float]:
+        """公开接口：计算凸轮各角度处的升程 h(θ)。"""
+        return self._motion_lifts(n_points)
+
     def curvature_radii(self) -> list[float]:
         """曲率半径（默认用 pitch_curve_points 的 2D 三点法）。"""
         pitch = self.pitch_curve_points()
         if not pitch:
             return []
-        # 只取前两个坐标（2D 曲线）
+        # 只取前两个坐标（2D 曲线），3D 点忽略 Z
         pts_2d = [(p[0], p[1]) for p in pitch]
         return self._curvature_radius_2d(pts_2d)
 
@@ -116,7 +120,8 @@ class CamBuilder(ABC):
                 y0, dy0, ddy0 = self._seg_lift_vel_acc(prev_seg, entry)
                 y1, dy1, ddy1 = self._seg_lift_vel_acc(seg, boundary + half_zone)
                 z = 2.0 * half_zone
-                t = ((theta - entry) % 360.0) / z
+                raw_t = ((theta - entry) % 360.0) / z if z > 1e-12 else 0.0
+                t = max(0.0, min(1.0, raw_t))
                 return self._quintic_hermite(
                     y0, dy0 * z, ddy0 * z * z,
                     y1, dy1 * z, ddy1 * z * z, t)
@@ -198,18 +203,7 @@ class CamBuilderFactory:
 
     @classmethod
     def _lazy_import_builders(cls):
-        """在首次需要时导入各构建器模块并注册。
-
-        先清除可能残留的部分初始化模块（之前的循环导入可能留下缓存），
-        再直接导入各构建器类并注册到工厂。
-        """
-        import sys
-        _base = 'fccamtrax.geometry'
-        for name in ('disk_cam', 'cylindrical_cam', 'linear_cam'):
-            full = f'{_base}.{name}'
-            if full in sys.modules:
-                del sys.modules[full]
-
+        """在首次需要时导入各构建器模块并注册。"""
         from .disk_cam import DiskCamBuilder
         from .cylindrical_cam import CylindricalCamBuilder
         from .linear_cam import LinearCamBuilder

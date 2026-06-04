@@ -23,6 +23,14 @@ class MotionSegment:
     end_lift: float = 20.0        # 终止升程 (mm)
     motion_name: str = "摆线运动"  # 运动规律（中文名）
 
+    def __post_init__(self):
+        if self.end_angle < self.start_angle:
+            raise ValueError(
+                f"终止角 ({self.end_angle}°) 不能小于起始角 ({self.start_angle}°)")
+        if self.start_angle < 0 or self.end_angle > 360:
+            raise ValueError(
+                f"角度范围应在 0~360°（当前 {self.start_angle}°~{self.end_angle}°）")
+
 
 @dataclass
 class FollowerParams:
@@ -31,8 +39,9 @@ class FollowerParams:
     roller_radius: float = 5.0
     offset: float = 0.0
     arm_length: float = 40.0
-    pivot_distance: float = 60.0
-    initial_angle: float = 0.0
+    pivot_x: float = 60.0
+    pivot_y: float = 0.0
+    initial_angle: float = 151.0
     phase_offset: float = 180.0
     follower2_roller_radius: float = 5.0
     follower2_offset: float = 0.0
