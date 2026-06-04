@@ -32,6 +32,17 @@ def _get_qt():
     raise ImportError("找不到 Qt 绑定")
 
 
+def _get_chart_panel():
+    """惰性加载图表面板（QtCharts 可能不可用）。"""
+    try:
+        from .analysis_panel import CamAnalysisPanel
+        return CamAnalysisPanel
+    except Exception as e:
+        import FreeCAD as App
+        App.Console.PrintError(f"FCCamTrax: 图表面板加载失败: {e}\n")
+        return None
+
+
 # ──────────────────────────────────────────────
 # 运动段编辑器对话框（独立大表格）
 # ──────────────────────────────────────────────
@@ -485,7 +496,7 @@ class CamTaskPanel:
             if ChartPanel is None:
                 self.QtWidgets.QMessageBox.information(
                     self.form, "图表不可用",
-                    "QtCharts 不可用。分析数据已计算但无法显示图表。"
+                    "图表面板加载失败，请查看报告视图中的错误信息。"
                 )
                 return
 

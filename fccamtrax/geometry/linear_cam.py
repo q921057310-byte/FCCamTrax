@@ -57,7 +57,6 @@ class LinearCamBuilder(CamBuilder):
         """无槽线性凸轮：升程曲线 + 底边 → 封闭面 → 拉伸。"""
         R = self.cam.base_radius
         base_h = self.cam.thickness
-        gw = self.cam.groove_width
         L = R * 2 * math.pi
 
         top_pts = [App.Vector(x, h + base_h, 0) for x, h in pitch]
@@ -85,7 +84,11 @@ class LinearCamBuilder(CamBuilder):
         return face.extrude(App.Vector(0, 0, base_h))
 
     def _build_grooved(self, pitch):
-        """带槽线性凸轮：Y 面沟槽，Z 宽=gw，Y 深=gd，X 两端开通。"""
+        """带槽线性凸轮：Y 面沟槽，槽宽=gw（Y 方向），槽深=gd（Z 方向），X 两端开通。
+
+        原理：块体在 X 方向比沟槽两端各多出 cleft，确保布尔剪切后两端自然开通，
+             无需在沟槽上加延伸截面（避免褶皱），且不使用 ruled 模式（避免粗糙表面）。
+        """
         R = self.cam.base_radius
         base_h = self.cam.thickness
         gw = self.cam.groove_width
@@ -96,10 +99,9 @@ class LinearCamBuilder(CamBuilder):
         lifts = [h for _, h in pitch]
         max_lift = max(lifts) if lifts else 0.0
 
-        # block Z 厚度 = base_h（非槽宽）
-        block_h = base_h + max_lift + gd + cleft
-        block = Part.makeBox(L, block_h, base_h,
-                             App.Vector(0, -gd - cleft, 0))
+        block_h = base_h + max_lift + gw + cleft
+        block = Part.makeBox(L + 2 * cleft, block_h, base_h,
+                             App.Vector(-cleft, -gw - cleft, 0))
 
         if len(pitch) > 2:
             step = max(1, len(pitch) // 90)
@@ -107,23 +109,14 @@ class LinearCamBuilder(CamBuilder):
             if indices and indices[-1] != len(pitch) - 1:
                 indices.append(len(pitch) - 1)
 
-            # Z 方向：沟槽范围 0..gw（在 block 表面内）
-            # X 两端延伸 0.1mm 避免端面与 block 共面
-            dx = 0.1
-            x0 = pitch[0][0] - dx
-            xL = pitch[-1][0] + dx
-            # 用 _lift_at 计算延伸处的升程（保证曲线连续）
-            da = dx / R * 180 / math.pi  # dx 对应的角度
-            h0 = self._lift_at(-da, self.cam.segments)
-            hL = self._lift_at(360.0 + da, self.cam.segments)
-
             sections = []
-            for x, h in [(x0, h0)] + [(pitch[i][0], pitch[i][1]) for i in indices] + [(xL, hL)]:
+            for i in indices:
+                x, h = pitch[i]
                 pts = [
                     App.Vector(x, h, 0.0),
-                    App.Vector(x, h, gw),
-                    App.Vector(x, h - gd, gw),
-                    App.Vector(x, h - gd, 0.0),
+                    App.Vector(x, h, gd),
+                    App.Vector(x, h - gw, gd),
+                    App.Vector(x, h - gw, 0.0),
                     App.Vector(x, h, 0.0),
                 ]
                 sections.append(Part.makePolygon(pts))

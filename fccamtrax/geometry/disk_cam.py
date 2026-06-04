@@ -164,18 +164,26 @@ class DiskCamBuilder(CamBuilder):
 
     def build(self):
         """Build the 3D disk cam solid."""
-        profile = self.pitch_curve_points()
-        if not profile:
-            raise RuntimeError("No profile points generated")
-
         if self.cam.grooved:
             return self._build_grooved()
         else:
+            profile = self.pitch_curve_points()
+            if not profile:
+                raise RuntimeError("No profile points generated")
             return self._build_solid(profile)
 
     def _build_solid(self, profile):
-        """Traditional disk cam: profile surface extruded."""
-        pts = [App.Vector(p[0], p[1], 0) for p in profile]
+        """Traditional disk cam: profile surface extruded.
+
+        降采样到最多 90 点再 BSpline 拟合（精度由 _motion_lifts 保证），
+        避免 OCC 对大点数 Periodic BSpline 的慢速插值。
+        """
+        n_pts = len(profile)
+        n_loft = min(n_pts, 90)
+        step = max(1, n_pts // n_loft)
+        sampled = [profile[i * step % n_pts] for i in range(n_loft)]
+
+        pts = [App.Vector(p[0], p[1], 0) for p in sampled]
         try:
             spline = Part.BSplineCurve()
             spline.interpolate(pts, PeriodicFlag=True)

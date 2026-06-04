@@ -1,12 +1,15 @@
 """内嵌图表组件，用于凸轮分析数据可视化。
 
-支持 PySide6 / PySide2 / PyQt6 / PyQt5。
-Qt 不可用时类定义为 None。
+使用 QPainter 手绘，不依赖 QtCharts。
+兼容 PySide6 / PySide2 / PyQt6 / PyQt5。
 """
+
+from __future__ import annotations
+import math
 
 from ..analysis.analyzer import AnalysisResult
 
-QtWidgets = QtCore = QtGui = QtCharts = None
+QtWidgets = QtCore = QtGui = None
 QT_LIB = None
 
 for _mod_name in ["PySide6", "PySide2", "PyQt6", "PyQt5"]:
@@ -15,130 +18,221 @@ for _mod_name in ["PySide6", "PySide2", "PyQt6", "PyQt5"]:
         QtWidgets = getattr(_mod, "QtWidgets", None)
         QtCore = getattr(_mod, "QtCore", None)
         QtGui = getattr(_mod, "QtGui", None)
-        QtCharts = getattr(_mod, "QtCharts", None)
         if QtWidgets and QtCore:
             QT_LIB = _mod_name
             break
-        QtWidgets = QtCore = QtGui = QtCharts = None
+        QtWidgets = QtCore = QtGui = None
     except ImportError:
         continue
 
-if QtWidgets is not None:
-    class CamChartWidget(QtWidgets.QWidget):
-        """多标签页分析图表容器。"""
 
-        # (中文标题, 属性名, Y轴单位, 颜色RGB)
-        CHART_CONFIGS = [
-            ("位移", "displacement", "mm", (0, 100, 200)),
-            ("速度", "velocity", "mm/rad", (50, 100, 200)),
-            ("加速度", "acceleration", "mm/rad²", (200, 50, 50)),
-            ("跃度", "jerk", "mm/rad³", (150, 100, 50)),
-            ("压力角", "pressure_angle", "°", (100, 150, 50)),
-            ("扭矩", "torque", "N·mm", (50, 150, 100)),
-            ("接触应力", "contact_stress", "MPa", (150, 50, 150)),
-            ("法向力", "normal_force", "N", (50, 50, 150)),
-            ("曲率半径", "curvature", "mm", (100, 100, 100)),
-        ]
+class _PlotWidget(QtWidgets.QWidget):
+    """单个曲线图，用 QPainter 手绘坐标轴、网格、曲线。"""
 
-        def __init__(self, parent=None):
-            super().__init__(parent)
-            self.setWindowTitle("凸轮分析图表")
-            self.setMinimumSize(800, 600)
+    MARGIN_LEFT = 60
+    MARGIN_RIGHT = 20
+    MARGIN_TOP = 10
+    MARGIN_BOTTOM = 50
 
-            layout = QtWidgets.QVBoxLayout(self)
+    def __init__(self, title: str, unit: str, color, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._unit = unit
+        self._color = QtCore.QColor(*color) if color else QtCore.QColor(0, 0, 0)
+        self._angles: list[float] = []
+        self._data: list[float] = []
+        self.setMouseTracking(False)
+        self.setMinimumSize(300, 200)
 
-            if QtCharts is None:
-                label = QtWidgets.QLabel(
-                    "QtCharts 不可用。图表需要 PySide6-Addons 或 PyQt6-QtCharts。"
-                )
-                label.setAlignment(QtCore.Qt.AlignCenter)
-                layout.addWidget(label)
-                self._tabs = None
-                return
+    def set_data(self, angles: list[float], data: list[float]):
+        self._angles = list(angles)
+        self._data = list(data)
+        self.update()
 
-            self._tabs = QtWidgets.QTabWidget()
-            layout.addWidget(self._tabs)
-            self._charts = {}
-            self._setup_charts()
+    def _plot_area(self):
+        w = self.width()
+        h = self.height()
+        return (self.MARGIN_LEFT, self.MARGIN_TOP,
+                w - self.MARGIN_LEFT - self.MARGIN_RIGHT,
+                h - self.MARGIN_TOP - self.MARGIN_BOTTOM)
 
-        def _setup_charts(self):
-            if not QtCharts or not self._tabs:
-                return
+    def _data_range(self):
+        if not self._data:
+            return 0.0, 1.0
+        y_min = min(self._data)
+        y_max = max(self._data)
+        if abs(y_max - y_min) < 1e-12:
+            y_min -= 1.0
+            y_max += 1.0
+        margin = (y_max - y_min) * 0.1
+        return y_min - margin, y_max + margin
 
-            for title, attr, unit, color in self.CHART_CONFIGS:
-                chart = QtCharts.QChart()
-                chart.setTitle(title)
-                chart.setAnimationOptions(QtCharts.QChart.NoAnimation)
-                chart.legend().hide()
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        try:
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        except Exception:
+            pass
+        self._draw_background(painter)
+        self._draw_axes(painter)
+        self._draw_grid(painter)
+        self._draw_curve(painter)
 
-                axis_x = QtCharts.QValueAxis()
-                axis_x.setTitleText("凸轮转角 (°)")
-                axis_x.setRange(0, 360)
-                axis_x.setTickCount(9)
-                chart.addAxis(axis_x, QtCore.Qt.AlignBottom)
+    def _draw_background(self, painter):
+        painter.fillRect(self.rect(), QtCore.Qt.white)
 
-                axis_y = QtCharts.QValueAxis()
-                axis_y.setTitleText(unit)
-                chart.addAxis(axis_y, QtCore.Qt.AlignLeft)
+    def _draw_axes(self, painter):
+        x0, y0, w, h = self._plot_area()
+        painter.setPen(QtCore.QPen(QtCore.Qt.black, 1))
+        # X axis (bottom)
+        painter.drawLine(x0, y0 + h, x0 + w, y0 + h)
+        # Y axis (left)
+        painter.drawLine(x0, y0, x0, y0 + h)
 
-                series = QtCharts.QLineSeries()
-                pen = series.pen()
-                pen.setColor(QtCore.QColor(*color))
-                pen.setWidth(2)
-                series.setPen(pen)
-                chart.addSeries(series)
-                series.attachAxis(axis_x)
-                series.attachAxis(axis_y)
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
 
-                view = QtCharts.QChartView(chart)
-                try:
-                    view.setRenderHint(QtGui.QPainter.Antialiasing)
-                except Exception:
-                    pass
+        # X ticks (0 to 360)
+        n_ticks_x = 9
+        for i in range(n_ticks_x):
+            x = x0 + w * i / (n_ticks_x - 1)
+            val = 360.0 * i / (n_ticks_x - 1)
+            painter.drawLine(int(x), y0 + h, int(x), y0 + h + 4)
+            painter.drawText(int(x) - 20, y0 + h + 16, 40, 16,
+                             QtCore.Qt.AlignCenter, f"{val:.0f}")
 
-                self._tabs.addTab(view, title)
-                self._charts[attr] = (series, axis_y)
+        # Y ticks (auto)
+        y_min, y_max = self._data_range()
+        n_ticks_y = 5
+        for i in range(n_ticks_y):
+            y = y0 + h - h * i / (n_ticks_y - 1)
+            val = y_min + (y_max - y_min) * i / (n_ticks_y - 1)
+            painter.drawText(x0 - 50, int(y) - 8, 46, 16,
+                             QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
+                             self._format_num(val))
 
-        def set_data(self, result):
-            if not QtCharts or not self._charts:
-                return
+        # Title
+        font.setPointSize(10)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.MARGIN_LEFT, 4, self.width() - self.MARGIN_LEFT - self.MARGIN_RIGHT, 16,
+                         QtCore.Qt.AlignCenter, self._title)
 
-            for title, attr, unit, color in self.CHART_CONFIGS:
-                if attr not in self._charts:
-                    continue
+        # X axis label
+        font.setPointSize(8)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.drawText(x0, y0 + h + 28, w, 20,
+                         QtCore.Qt.AlignCenter, "凸轮转角 (°)")
 
-                series, axis_y = self._charts[attr]
-                data = getattr(result, attr, None)
-                if data is None:
-                    continue
+        # Y axis label
+        painter.save()
+        painter.translate(12, y0 + h // 2)
+        painter.rotate(-90)
+        painter.drawText(-40, -8, 80, 16,
+                         QtCore.Qt.AlignCenter, self._unit)
+        painter.restore()
 
-                series.clear()
-                points = []
-                for i, val in enumerate(data):
-                    angle = result.angles[i] if i < len(result.angles) else i
-                    points.append(QtCore.QPointF(angle, val))
+    def _draw_grid(self, painter):
+        x0, y0, w, h = self._plot_area()
+        pen = QtCore.QPen(QtCore.QColor(220, 220, 220), 1)
+        pen.setStyle(QtCore.Qt.DashLine)
+        painter.setPen(pen)
 
-                for p in points:
-                    series.append(p)
+        n_ticks_x = 9
+        for i in range(1, n_ticks_x - 1):
+            x = x0 + w * i / (n_ticks_x - 1)
+            painter.drawLine(int(x), y0, int(x), y0 + h)
 
-                if data:
-                    y_min = min(data)
-                    y_max = max(data)
-                    margin = (y_max - y_min) * 0.1 if y_max > y_min else 1.0
-                    axis_y.setRange(y_min - margin, y_max + margin)
+        n_ticks_y = 5
+        for i in range(1, n_ticks_y):
+            y = y0 + h - h * i / (n_ticks_y - 1)
+            painter.drawLine(x0, int(y), x0 + w, int(y))
 
-    class CamAnalysisPanel(QtWidgets.QDockWidget):
-        """可停靠的分析图表面板。"""
+    def _draw_curve(self, painter):
+        if not self._data or not self._angles:
+            return
+        x0, y0, w, h = self._plot_area()
+        y_min, y_max = self._data_range()
 
-        def __init__(self, parent=None):
-            super().__init__("凸轮分析", parent)
-            self.chart_widget = CamChartWidget()
-            self.setWidget(self.chart_widget)
-            self.setMinimumSize(850, 650)
+        pen = QtCore.QPen(self._color, 2)
+        painter.setPen(pen)
 
-        def update_data(self, result):
-            self.chart_widget.set_data(result)
+        path = QtGui.QPainterPath()
+        first = True
+        for i in range(len(self._angles)):
+            x = x0 + w * self._angles[i] / 360.0
+            y = y0 + h - h * (self._data[i] - y_min) / (y_max - y_min)
+            if first:
+                path.moveTo(x, y)
+                first = False
+            else:
+                path.lineTo(x, y)
+        painter.drawPath(path)
 
-else:
-    CamChartWidget = None
-    CamAnalysisPanel = None
+    def _format_num(self, val):
+        if abs(val) >= 1000:
+            return f"{val:.1f}"
+        elif abs(val) >= 1:
+            return f"{val:.2f}"
+        elif abs(val) >= 0.01:
+            return f"{val:.4f}"
+        else:
+            return f"{val:.6f}"
+
+
+class CamChartWidget(QtWidgets.QWidget):
+    """多标签页分析图表容器。"""
+
+    CHART_CONFIGS = [
+        ("位移", "displacement", "mm", (0, 100, 200)),
+        ("速度", "velocity", "mm/rad", (50, 100, 200)),
+        ("加速度", "acceleration", "mm/rad²", (200, 50, 50)),
+        ("跃度", "jerk", "mm/rad³", (150, 100, 50)),
+        ("压力角", "pressure_angle", "°", (100, 150, 50)),
+        ("扭矩", "torque", "N·mm", (50, 150, 100)),
+        ("接触应力", "contact_stress", "MPa", (150, 50, 150)),
+        ("法向力", "normal_force", "N", (50, 50, 150)),
+        ("曲率半径", "curvature", "mm", (100, 100, 100)),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(800, 600)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._tabs = QtWidgets.QTabWidget()
+        layout.addWidget(self._tabs)
+
+        self._plot_widgets: dict[str, _PlotWidget] = {}
+        for title, attr, unit, color in self.CHART_CONFIGS:
+            pw = _PlotWidget(title, unit, color)
+            self._tabs.addTab(pw, title)
+            self._plot_widgets[attr] = pw
+
+    def set_data(self, result):
+        for title, attr, unit, color in self.CHART_CONFIGS:
+            if attr not in self._plot_widgets:
+                continue
+            data = getattr(result, attr, None)
+            if data is None:
+                continue
+            angles = result.angles[:len(data)] if hasattr(result, 'angles') else []
+            if not angles:
+                angles = [i * 360.0 / len(data) for i in range(len(data))]
+            self._plot_widgets[attr].set_data(angles, data)
+
+
+class CamAnalysisPanel(QtWidgets.QDockWidget):
+    """可停靠的分析图表面板。"""
+
+    def __init__(self, parent=None):
+        super().__init__("凸轮分析", parent)
+        self.chart_widget = CamChartWidget()
+        self.setWidget(self.chart_widget)
+        self.setMinimumSize(850, 650)
+
+    def update_data(self, result):
+        self.chart_widget.set_data(result)

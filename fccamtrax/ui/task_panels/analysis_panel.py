@@ -3,7 +3,8 @@
 CamAnalysisPanel = None
 try:
     from ...chart.widgets import CamAnalysisPanel
-except Exception:
-    pass
+except Exception as e:
+    import FreeCAD as App
+    App.Console.PrintError(f"FCCamTrax: analysis_panel import failed: {e}\n")
 
 __all__ = ["CamAnalysisPanel"]
