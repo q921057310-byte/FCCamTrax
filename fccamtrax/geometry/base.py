@@ -40,6 +40,39 @@ class CamBuilder(ABC):
     def profile_curve_points(self) -> list[tuple[float, float]]:
         ...
 
+    def pressure_angles(self) -> list[float]:
+        """压力角（默认返回空列表，子类可覆盖）。"""
+        return []
+
+    def curvature_radii(self) -> list[float]:
+        """曲率半径（默认用 pitch_curve_points 的 2D 三点法）。"""
+        pitch = self.pitch_curve_points()
+        if not pitch:
+            return []
+        # 只取前两个坐标（2D 曲线）
+        pts_2d = [(p[0], p[1]) for p in pitch]
+        return self._curvature_radius_2d(pts_2d)
+
+    @staticmethod
+    def _curvature_radius_2d(points):
+        """2D 曲线三点法曲率半径。"""
+        n = len(points)
+        radii = []
+        for i in range(n):
+            p0 = points[(i - 1) % n]
+            p1 = points[i]
+            p2 = points[(i + 1) % n]
+            a = math.sqrt((p1[0]-p0[0])**2 + (p1[1]-p0[1])**2)
+            b = math.sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
+            c = math.sqrt((p2[0]-p0[0])**2 + (p2[1]-p0[1])**2)
+            s = (a + b + c) / 2
+            area_sq = s * (s-a) * (s-b) * (s-c)
+            if area_sq <= 0:
+                radii.append(float('inf'))
+            else:
+                radii.append((a * b * c) / (4 * math.sqrt(area_sq)))
+        return radii
+
     def _motion_lifts(self, n_points: int = 360) -> list[float]:
         """计算凸轮各角度处的升程 h(θ)。"""
         segments = self.cam.segments

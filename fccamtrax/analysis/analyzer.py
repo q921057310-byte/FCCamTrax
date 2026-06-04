@@ -68,26 +68,6 @@ class CamAnalyst:
         result.pressure_angle = builder.pressure_angles()
 
         # 曲率半径
-        pitch = builder.pitch_curve_points()
-        result.curvature = CamAnalyst._curvature_radius(pitch)
+        result.curvature = builder.curvature_radii()
 
         return result
-
-    @staticmethod
-    def _curvature_radius(points):
-        n = len(points)
-        radii = []
-        for i in range(n):
-            p0 = points[(i - 1) % n]
-            p1 = points[i]
-            p2 = points[(i + 1) % n]
-            a = math.sqrt((p1[0]-p0[0])**2 + (p1[1]-p0[1])**2)
-            b = math.sqrt((p2[0]-p1[0])**2 + (p2[1]-p1[1])**2)
-            c = math.sqrt((p2[0]-p0[0])**2 + (p2[1]-p0[1])**2)
-            s = (a + b + c) / 2
-            area_sq = s * (s-a) * (s-b) * (s-c)
-            if area_sq <= 0:
-                radii.append(float('inf'))
-            else:
-                radii.append((a * b * c) / (4 * math.sqrt(area_sq)))
-        return radii

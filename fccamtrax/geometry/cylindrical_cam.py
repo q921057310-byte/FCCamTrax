@@ -25,6 +25,48 @@ class CylindricalCamBuilder(CamBuilder):
     def profile_curve_points(self):
         return self.pitch_curve_points()
 
+    def pressure_angles(self) -> list[float]:
+        """圆柱凸轮压力角：α(θ) = arctan((dh/dθ) / R)。"""
+        n = self._n_points
+        lifts = self._motion_lifts(n)
+        R = self.cam.base_radius
+        dtheta = 2 * math.pi / n
+
+        pressures = []
+        for i in range(n):
+            idx_next = (i + 1) % n
+            dh_dtheta = (lifts[idx_next] - lifts[i]) / dtheta
+            denom = R
+            if denom < 1e-6:
+                denom = 1e-6
+            alpha = math.atan2(abs(dh_dtheta), denom)
+            pressures.append(math.degrees(alpha))
+
+        return pressures
+
+    def curvature_radii(self) -> list[float]:
+        """圆柱凸轮曲率半径：ρ = (R² + (dh/dθ)²)^(3/2) / (R * sqrt((d²h/dθ²)² + (dh/dθ)² + R²))。"""
+        n = self._n_points
+        lifts = self._motion_lifts(n)
+        R = self.cam.base_radius
+        dtheta = 2 * math.pi / n
+
+        radii = []
+        for i in range(n):
+            idx_prev = (i - 1) % n
+            idx_next = (i + 1) % n
+            dh = (lifts[idx_next] - lifts[idx_prev]) / (2 * dtheta)
+            d2h = (lifts[idx_next] - 2 * lifts[i] + lifts[idx_prev]) / (dtheta ** 2)
+
+            v_sq = R ** 2 + dh ** 2
+            denom = R * math.sqrt(d2h ** 2 + dh ** 2 + R ** 2)
+            if denom < 1e-12:
+                radii.append(float('inf'))
+            else:
+                radii.append(v_sq ** 1.5 / denom)
+
+        return radii
+
     def build(self):
         R = self.cam.base_radius
         gw = self.cam.groove_width

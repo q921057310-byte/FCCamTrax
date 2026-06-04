@@ -10,6 +10,7 @@ import FreeCAD as App
 import Part
 from .base import CamBuilder, CamBuilderFactory
 from .follower import CamParams, FollowerParams
+from .utils import offset_curve
 
 
 class LinearCamBuilder(CamBuilder):
@@ -35,8 +36,61 @@ class LinearCamBuilder(CamBuilder):
         return points
 
     def profile_curve_points(self) -> list[tuple[float, float]]:
-        """线性凸轮轮廓即为展开升程曲线本身。"""
-        return self.pitch_curve_points()
+        """线性凸轮轮廓 = 升程曲线偏移滚子半径。"""
+        pitch = self.pitch_curve_points()
+        roller_r = self.follower.roller_radius
+        if roller_r <= 0:
+            return pitch
+        return offset_curve(pitch, -roller_r, closed=False)
+
+    def pressure_angles(self) -> list[float]:
+        """线性凸轮压力角：α(θ) = arctan((dh/dθ) / R)。"""
+        n = self._n_points
+        lifts = self._motion_lifts(n)
+        R = self.cam.base_radius
+        dtheta = 2 * math.pi / n
+
+        pressures = []
+        for i in range(n):
+            if i == n - 1:
+                dh_dtheta = (lifts[-1] - lifts[-2]) / dtheta
+            else:
+                dh_dtheta = (lifts[i+1] - lifts[i]) / dtheta
+            denom = R
+            if denom < 1e-6:
+                denom = 1e-6
+            alpha = math.atan2(abs(dh_dtheta), denom)
+            pressures.append(math.degrees(alpha))
+
+        return pressures
+
+    def curvature_radii(self) -> list[float]:
+        """线性凸轮曲率半径：ρ = (R²+(dh/dθ)²)^(3/2) / |R·d²h/dθ²|。"""
+        n = self._n_points
+        lifts = self._motion_lifts(n)
+        R = self.cam.base_radius
+        dtheta = 2 * math.pi / n
+
+        radii = []
+        for i in range(n):
+            if i == 0:
+                dh = (lifts[1] - lifts[0]) / dtheta
+                d2h = (lifts[2] - 2*lifts[1] + lifts[0]) / (dtheta ** 2)
+            elif i == n - 1:
+                dh = (lifts[-1] - lifts[-2]) / dtheta
+                d2h = (lifts[-1] - 2*lifts[-2] + lifts[-3]) / (dtheta ** 2)
+            else:
+                dh = (lifts[i+1] - lifts[i-1]) / (2 * dtheta)
+                d2h = (lifts[i+1] - 2*lifts[i] + lifts[i-1]) / (dtheta ** 2)
+
+            num = (R ** 2 + dh ** 2) ** 1.5
+            denom = abs(R * d2h)
+            if denom < 1e-12:
+                radii.append(float('inf'))
+            else:
+                radii.append(num / denom)
+
+        return radii
 
     # ──────────────────────────────────────────────
     # 3D Solid: 升程曲线 + 底边 → 封闭面 → 拉伸
@@ -44,42 +98,46 @@ class LinearCamBuilder(CamBuilder):
 
     def build(self):
         """构建线性凸轮 3D 实体。"""
-        pitch = self.pitch_curve_points()
-        if not pitch:
-            raise RuntimeError("无升程数据")
-
         if self.cam.grooved:
+            pitch = self.pitch_curve_points()
+            if not pitch:
+                raise RuntimeError("无升程数据")
             return self._build_grooved(pitch)
         else:
-            return self._build_solid(pitch)
+            profile = self.profile_curve_points()
+            if not profile:
+                raise RuntimeError("无轮廓数据")
+            return self._build_solid(profile)
 
-    def _build_solid(self, pitch):
-        """无槽线性凸轮：升程曲线 + 底边 → 封闭面 → 拉伸。"""
+    def _build_solid(self, profile):
+        """无槽线性凸轮：升程曲线 BSpline 插值 + 底边 → 封闭面 → 拉伸。"""
         R = self.cam.base_radius
         base_h = self.cam.thickness
         L = R * 2 * math.pi
 
-        top_pts = [App.Vector(x, h + base_h, 0) for x, h in pitch]
+        # 降采样
+        n_pts = len(profile)
+        n_loft = min(n_pts, 90)
+        step = max(1, n_pts // n_loft)
+        sampled = [profile[i * step % n_pts] for i in range(n_loft)]
+
+        # 顶边 → BSpline
+        top_pts = [App.Vector(x, h + base_h, 0) for x, h in sampled]
         if abs(top_pts[-1].x - L) > 0.01:
-            top_pts.append(App.Vector(L, pitch[-1][1] + base_h, 0))
+            top_pts.append(App.Vector(L, sampled[-1][1] + base_h, 0))
         if abs(top_pts[0].x) > 0.01:
-            top_pts.insert(0, App.Vector(0, pitch[0][1] + base_h, 0))
+            top_pts.insert(0, App.Vector(0, sampled[0][1] + base_h, 0))
 
-        bottom_pts = [App.Vector(L, 0, 0), App.Vector(0, 0, 0)]
-        all_pts = top_pts + bottom_pts
+        spline = Part.BSplineCurve()
+        spline.interpolate(top_pts)
+        top_edge = spline.toShape()
 
-        edges = []
-        for j in range(len(all_pts) - 1):
-            e = Part.makeLine(
-                (all_pts[j].x, all_pts[j].y, all_pts[j].z),
-                (all_pts[j+1].x, all_pts[j+1].y, all_pts[j+1].z))
-            edges.append(e)
-        e = Part.makeLine(
-            (all_pts[-1].x, all_pts[-1].y, all_pts[-1].z),
-            (all_pts[0].x, all_pts[0].y, all_pts[0].z))
-        edges.append(e)
+        # 三条直边：右 → 下 → 左
+        right = Part.makeLine(top_pts[-1], (L, 0, 0))
+        bottom = Part.makeLine((L, 0, 0), (0, 0, 0))
+        left = Part.makeLine((0, 0, 0), top_pts[0])
 
-        wire = Part.Wire(edges)
+        wire = Part.Wire([top_edge, right, bottom, left])
         face = Part.Face(wire)
         return face.extrude(App.Vector(0, 0, base_h))
 

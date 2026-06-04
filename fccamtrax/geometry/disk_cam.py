@@ -81,11 +81,11 @@ class DiskCamBuilder(CamBuilder):
     def _pitch_oscillating(self) -> list[tuple[float, float]]:
         """Oscillating (swinging arm) follower.
 
-        Arm pivot is at distance d from cam center, arm length = l.
-        The swing angle ψ(θ) varies with cam rotation.
+        支点 P 固定在凸轮上方的 (0, d) 处。
+        臂长 l，臂角 ψ(θ) = ψ₀ + h(θ)/l。
+        滚子中心世界坐标 → 旋转 -θ 到凸轮固连系。
         """
         lifts = self._motion_lifts(self._n_points)
-        rb = self.cam.base_radius
         l = self.follower.arm_length
         d = self.follower.pivot_distance
         psi0 = math.radians(self.follower.initial_angle)
@@ -93,16 +93,16 @@ class DiskCamBuilder(CamBuilder):
         points = []
         for i, h in enumerate(lifts):
             theta = 2 * math.pi * i / self._n_points
-            # Contact point radius on cam
-            r_contact = rb + h
-            # Swing angle approximation: ψ ≈ h / l
+            # 臂角
             psi = psi0 + h / l
-            # Pivot position (fixed)
-            px = d * math.cos(theta + math.pi / 2)
-            py = d * math.sin(theta + math.pi / 2)
-            # Follower tip position (relative to pivot)
-            fx = px + l * math.cos(psi + theta)
-            fy = py + l * math.sin(psi + theta)
+            # 固定支点（Y 轴正上方）
+            px, py = 0.0, d
+            # 滚子中心世界坐标
+            rx = px + l * math.cos(psi)
+            ry = py + l * math.sin(psi)
+            # 旋转 -θ 到凸轮固连系
+            fx = rx * math.cos(theta) + ry * math.sin(theta)
+            fy = -rx * math.sin(theta) + ry * math.cos(theta)
             points.append((fx, fy))
         return points
 
@@ -167,7 +167,7 @@ class DiskCamBuilder(CamBuilder):
         if self.cam.grooved:
             return self._build_grooved()
         else:
-            profile = self.pitch_curve_points()
+            profile = self.profile_curve_points()
             if not profile:
                 raise RuntimeError("No profile points generated")
             return self._build_solid(profile)

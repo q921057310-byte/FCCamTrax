@@ -38,7 +38,7 @@ class _PlotWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._title = title
         self._unit = unit
-        self._color = QtCore.QColor(*color) if color else QtCore.QColor(0, 0, 0)
+        self._color = QtGui.QColor(*color) if color else QtGui.QColor(0, 0, 0)
         self._angles: list[float] = []
         self._data: list[float] = []
         self.setMouseTracking(False)
@@ -59,8 +59,11 @@ class _PlotWidget(QtWidgets.QWidget):
     def _data_range(self):
         if not self._data:
             return 0.0, 1.0
-        y_min = min(self._data)
-        y_max = max(self._data)
+        finite = [v for v in self._data if math.isfinite(v)]
+        if not finite:
+            return 0.0, 1.0
+        y_min = min(finite)
+        y_max = max(finite)
         if abs(y_max - y_min) < 1e-12:
             y_min -= 1.0
             y_max += 1.0
@@ -70,20 +73,22 @@ class _PlotWidget(QtWidgets.QWidget):
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
         try:
-            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            self._draw_background(painter)
+            self._draw_axes(painter)
+            self._draw_grid(painter)
+            self._draw_curve(painter)
         except Exception:
             pass
-        self._draw_background(painter)
-        self._draw_axes(painter)
-        self._draw_grid(painter)
-        self._draw_curve(painter)
+        finally:
+            painter.end()
 
     def _draw_background(self, painter):
         painter.fillRect(self.rect(), QtCore.Qt.white)
 
     def _draw_axes(self, painter):
         x0, y0, w, h = self._plot_area()
-        painter.setPen(QtCore.QPen(QtCore.Qt.black, 1))
+        painter.setPen(QtGui.QPen(QtCore.Qt.black, 1))
         # X axis (bottom)
         painter.drawLine(x0, y0 + h, x0 + w, y0 + h)
         # Y axis (left)
@@ -136,7 +141,7 @@ class _PlotWidget(QtWidgets.QWidget):
 
     def _draw_grid(self, painter):
         x0, y0, w, h = self._plot_area()
-        pen = QtCore.QPen(QtCore.QColor(220, 220, 220), 1)
+        pen = QtGui.QPen(QtGui.QColor(220, 220, 220), 1)
         pen.setStyle(QtCore.Qt.DashLine)
         painter.setPen(pen)
 
@@ -156,14 +161,18 @@ class _PlotWidget(QtWidgets.QWidget):
         x0, y0, w, h = self._plot_area()
         y_min, y_max = self._data_range()
 
-        pen = QtCore.QPen(self._color, 2)
+        pen = QtGui.QPen(self._color, 2)
         painter.setPen(pen)
 
         path = QtGui.QPainterPath()
         first = True
         for i in range(len(self._angles)):
+            val = self._data[i]
+            if not math.isfinite(val):
+                first = True
+                continue
             x = x0 + w * self._angles[i] / 360.0
-            y = y0 + h - h * (self._data[i] - y_min) / (y_max - y_min)
+            y = y0 + h - h * (val - y_min) / (y_max - y_min)
             if first:
                 path.moveTo(x, y)
                 first = False
