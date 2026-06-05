@@ -1,20 +1,21 @@
 """Disk (plate) cam geometry builder.
 
 Generates pitch curves, profile curves, and 3D solids for disk cams
-with translating (on/off center), oscillating, double, and conjugate followers.
+with translating (on/off center), oscillating followers.
 """
 
 from __future__ import annotations
 import math
 import FreeCAD as App
 import Part
-from .base import CamBuilder, CamBuilderFactory
+from .base import CamBuilder
 from .follower import CamParams, FollowerParams, FollowerType
-from .utils import polar_to_cartesian
+from .utils import (polar_to_cartesian, pressure_angle_oncenter,
+                    pressure_angle_offcenter, pressure_angle_oscillating)
 
 
 class DiskCamBuilder(CamBuilder):
-    """盘形凸轮构建器，支持多段运动。"""
+    """Disk cam builder supporting multi-segment motion."""
 
     def __init__(self, cam_params: CamParams, follower_params: FollowerParams):
         super().__init__(cam_params, follower_params)
@@ -33,10 +34,6 @@ class DiskCamBuilder(CamBuilder):
             return self._pitch_translating_offcenter()
         elif ft == FollowerType.OSCILLATING:
             return self._pitch_oscillating()
-        elif ft == FollowerType.DOUBLE:
-            return self._pitch_translating_oncenter()  # primary follower
-        elif ft == FollowerType.CONJUGATE:
-            return self._pitch_translating_oncenter()  # primary follower
         else:
             raise ValueError(f"Unsupported follower type: {ft}")
 
@@ -67,7 +64,8 @@ class DiskCamBuilder(CamBuilder):
             theta = 2 * math.pi * i / self._n_points
             r_pitch = rb + h
             if r_pitch <= abs(e):
-                r_pitch = abs(e) + 0.01
+                raise ValueError(f"Eccentric cam at θ={i*360/self._n_points:.1f}° lift insufficient: "
+                                 f"rb+h ({r_pitch:.2f}) ≤ |e| ({abs(e):.2f})")
             d = math.sqrt(r_pitch**2 - e**2)
             # 在凸轮固连系中，导路在 X=e 处垂直。
             # 滚子中心在 (e, d)，旋转 -θ 得凸轮固连坐标
@@ -85,6 +83,8 @@ class DiskCamBuilder(CamBuilder):
         """
         lifts = self._motion_lifts(self._n_points)
         l = self.follower.arm_length
+        if l < 1e-6:
+            raise RuntimeError("Arm length cannot be 0")
         px = self.follower.pivot_x
         py = self.follower.pivot_y
         psi0 = math.radians(self.follower.initial_angle)
@@ -139,45 +139,12 @@ class DiskCamBuilder(CamBuilder):
             result.append((px + roller_r * nx, py + roller_r * ny))
         return result
 
-    def _conjugate_profile_points(self) -> list[tuple[float, float]]:
-        """Compute conjugate (complementary) profile for conjugate follower.
-
-        沿切线法线方向远离中心偏移。
-        """
-        pitch = self.pitch_curve_points()
-        roller_r = self.follower.conjugate_roller_radius
-        n = len(pitch)
-        if n < 3:
-            return pitch
-        result = []
-        for i in range(n):
-            px, py = pitch[i]
-            p_prev = pitch[(i - 1) % n]
-            p_next = pitch[(i + 1) % n]
-            tx = p_next[0] - p_prev[0]
-            ty = p_next[1] - p_prev[1]
-            tl = math.sqrt(tx * tx + ty * ty)
-            if tl < 1e-12:
-                result.append((px, py))
-                continue
-            nx, ny = -ty / tl, tx / tl
-            # 确保法线远离中心（点积 > 0 表示指向外）
-            if px * nx + py * ny < 0:
-                nx, ny = -nx, -ny
-            # 向外偏移：法线已远离中心，加上 roller_r 即向外
-            result.append((px + roller_r * nx, py + roller_r * ny))
-        return result
-
     # ──────────────────────────────────────────────
     # Pressure angle
     # ──────────────────────────────────────────────
 
     def pressure_angles(self) -> list[float]:
-        """Compute pressure angle at each cam angle.
-
-        直动从动件：α = arctan(|dh/dθ - e| / sqrt((rb+h)² - e²))
-        摆动从动件：α = arctan(|L·dψ/dθ| / (rb+h))
-        """
+        """Compute pressure angle at each cam angle."""
         n = self._n_points
         lifts = self._motion_lifts(n)
         rb = self.cam.base_radius
@@ -192,26 +159,14 @@ class DiskCamBuilder(CamBuilder):
             idx_next = (i + 1) % n
             dh_dtheta = (lifts[idx_next] - lifts[i]) / dtheta
             h = lifts[i]
-            r_pitch = rb + h
 
             if ft == FollowerType.OSCILLATING:
-                # 摆动：tan(α) = |L·dψ/dθ| / (rb+h)
-                # ψ = ψ₀ + h/L → dψ/dθ = (1/L)·dh/dθ
-                if L > 1e-6:
-                    dpsi_dtheta = dh_dtheta / L
-                    denom = max(r_pitch, 1e-6)
-                    alpha = math.atan2(abs(L * dpsi_dtheta), denom)
-                else:
-                    alpha = math.pi / 2
+                alpha = pressure_angle_oscillating(rb, h, L, dh_dtheta)
             elif e != 0.0:
-                # 偏置直动
-                denom = math.sqrt(max(r_pitch**2 - e**2, 1e-12))
-                alpha = math.atan2(abs(dh_dtheta - e), denom)
+                alpha = pressure_angle_offcenter(rb, h, e, dh_dtheta)
             else:
-                # 对心直动
-                denom = max(r_pitch, 1e-6)
-                alpha = math.atan2(abs(dh_dtheta), denom)
-            pressures.append(math.degrees(alpha))
+                alpha = pressure_angle_oncenter(rb, h, dh_dtheta)
+            pressures.append(alpha)
 
         return pressures
 
@@ -276,8 +231,8 @@ class DiskCamBuilder(CamBuilder):
         sections = []
         for i in range(n_loft):
             idx = (i * step) % n
-            idx_prev = (idx - step) % n
-            idx_next = (idx + step) % n
+            idx_prev = (idx - 1) % n
+            idx_next = (idx + 1) % n
             px, py = pitch[idx]
             p_prev = pitch[idx_prev]
             p_next = pitch[idx_next]

@@ -7,19 +7,47 @@ from __future__ import annotations
 import math
 from ..geometry.base import CamBuilderFactory
 from ..geometry.follower import CamParams, FollowerParams, FollowerType
+from ..geometry.utils import pressure_angle_oncenter, pressure_angle_offcenter, pressure_angle_oscillating, pressure_angle_linear_cyl
+from ..i18n import tr
 
-QtWidgets = QtCore = QtGui = None
+_QtWidgets = _QtCore = _QtGui = None
 for _mod_name in ["PySide6", "PySide2", "PyQt6", "PyQt5"]:
     try:
         _mod = __import__(_mod_name)
-        QtWidgets = getattr(_mod, "QtWidgets", None)
-        QtCore = getattr(_mod, "QtCore", None)
-        QtGui = getattr(_mod, "QtGui", None)
-        if QtWidgets and QtCore and QtGui:
+        _QtWidgets = getattr(_mod, "QtWidgets", None)
+        _QtCore = getattr(_mod, "QtCore", None)
+        _QtGui = getattr(_mod, "QtGui", None)
+        if _QtWidgets and _QtCore:
             break
-        QtWidgets = QtCore = QtGui = None
+        _QtWidgets = _QtCore = _QtGui = None
     except ImportError:
         continue
+
+if _QtWidgets is None:
+    # 无 Qt 环境：创建空壳类避免崩溃
+    class _DummyWidget:
+        def __init__(self, parent=None): pass
+        def setMinimumSize(self, *a): pass
+        def setSizePolicy(self, *a): pass
+        def update(self): pass
+        def width(self): return 200
+        def height(self): return 150
+        def rect(self):
+            class R:
+                def __init__(s):
+                    s.x = s.y = lambda: 0
+                    s.width = s.height = lambda: 200
+            return R()
+    _QtWidgets = type("DummyQtWidgets", (), {"QWidget": _DummyWidget,
+        "QSizePolicy": type("QSP", (), {"Policy": type("P", (), {"Expanding": 1})})})()
+    _QtCore = type("DummyQtCore", (), {"Qt": type("Q", (), {"white": 0, "red": 0, "black": 0, "gray": 0,
+        "AlignCenter": 0, "DashLine": 0, "NoBrush": 0, "Horizontal": 0, "TicksBelow": 0})})()
+    _QtGui = type("DummyQtGui", (), {"QPainter": type("QP", (), {"RenderHint": type("R", (), {"Antialiasing": 1})}),
+        "QPen": lambda *a: None, "QColor": lambda *a: None, "QPainterPath": lambda: None})()
+
+QtWidgets = _QtWidgets
+QtCore = _QtCore
+QtGui = _QtGui
 
 
 class CamPreviewWidget(QtWidgets.QWidget):
@@ -29,7 +57,11 @@ class CamPreviewWidget(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(400, 400)
+        self.setMinimumSize(200, 150)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
         self._cam: CamParams | None = None
         self._follower: FollowerParams | None = None
         self._pitch_curve: list[tuple[float, float]] = []
@@ -68,7 +100,7 @@ class CamPreviewWidget(QtWidgets.QWidget):
         profile_raw = builder.profile_curve_points()
         self._lifts = builder.motion_lifts(len(pitch_raw))
 
-        # 圆柱凸轮：3D 点 (x,y,z) → 展开 2D (R*θ, z)
+        # Cylindrical Cam：3D 点 (x,y,z) → 展开 2D (R*θ, z)
         if self._cam.cam_type == "cylindrical":
             R = self._cam.base_radius
             n = len(pitch_raw)
@@ -96,14 +128,14 @@ class CamPreviewWidget(QtWidgets.QWidget):
         contact_idx = int((cam_angle_deg / 360.0) * n) % n
 
         if cam_type in ("linear", "cylindrical"):
-            # 线性/圆柱凸轮：pitch_curve 已经是 (x, rb+h) 格式
+            # 线性/Cylindrical Cam：pitch_curve 已经是 (x, rb+h) 格式
             px, py = self._pitch_curve[contact_idx]
             roller_r = self._follower.roller_radius
             self._roller_pos = (px, py + roller_r)
             self._pivot_pos = (0.0, 0.0)
             return
 
-        # ── 盘形凸轮 ──
+        # ── Disk Cam ──
         theta = math.radians(cam_angle_deg)
         ct, st = math.cos(theta), math.sin(theta)
         ft = self._follower.follower_type
@@ -175,7 +207,7 @@ class CamPreviewWidget(QtWidgets.QWidget):
                 self._draw_linear_mechanism(painter)
             else:
                 painter.drawText(self.rect(), QtCore.Qt.AlignCenter,
-                                 "预览仅支持盘形/线性/圆柱凸轮")
+                                 tr("Preview: disk/linear/cylindrical cams only"))
         finally:
             painter.end()
 
@@ -309,7 +341,7 @@ class CamPreviewWidget(QtWidgets.QWidget):
             painter.drawText(10, 20, f"α = {pa:.1f}°")
 
     def _draw_linear_mechanism(self, painter):
-        """线性凸轮预览：凸轮体水平移动，从动件在固定位置上下运动。"""
+        """Linear Cam预览：凸轮体水平移动，Follower在固定位置上下运动。"""
         pitch = self._pitch_curve
         profile = self._profile_curve if self._profile_curve else pitch
         if not profile:
@@ -323,10 +355,10 @@ class CamPreviewWidget(QtWidgets.QWidget):
 
         # 当前位置（0~1）
         frac = (self._cam_angle % 360.0) / 360.0
-        # 凸轮偏移量（凸轮向左移动，从动件固定在中心）
+        # 凸轮偏移量（凸轮向左移动，Follower固定在中心）
         cam_offset = frac * L
 
-        # 计算数据范围（显示从动件附近的一段）
+        # 计算数据范围（显示Follower附近的一段）
         ys = [p[1] for p in profile]
         y_max = max(ys) + roller_r + 5
 
@@ -336,13 +368,13 @@ class CamPreviewWidget(QtWidgets.QWidget):
         sy = h_area / (y_max + base_h + 1e-6)
         scale = min(sx, sy) * 0.9
 
-        # 从动件固定在屏幕中心
+        # Follower固定在屏幕中心
         foll_x = x0 + w / 2
         # 底部基线
         base_y = y0 + h_area * 0.75
 
         def to_screen(world_x, world_y):
-            # 凸轮偏移后，从动件在中心
+            # 凸轮偏移后，Follower在中心
             sx = foll_x + (world_x - cam_offset) * scale
             sy = base_y - world_y * scale
             return sx, sy
@@ -371,13 +403,13 @@ class CamPreviewWidget(QtWidgets.QWidget):
                 path.lineTo(sx, sy)
         painter.drawPath(path)
 
-        # ── 从动件（固定在中心）──
+        # ── Follower（固定在中心）──
         # 滚子接触点：在 profile 上当前 frac 位置的高度
         contact_idx = int(frac * len(profile)) % len(profile)
         contact_h = profile[contact_idx][1]
         roller_screen_y = base_y - (contact_h + roller_r) * scale
 
-        # 画从动件导路（垂直虚线）
+        # 画Follower导路（垂直虚线）
         pen_guide = QtGui.QPen(QtGui.QColor(150, 150, 150), 1)
         pen_guide.setStyle(QtCore.Qt.DashLine)
         painter.setPen(pen_guide)
@@ -391,7 +423,7 @@ class CamPreviewWidget(QtWidgets.QWidget):
         painter.drawEllipse(QtCore.QPointF(foll_x, roller_screen_y),
                             roller_r * scale, roller_r * scale)
 
-        # 画从动件杆（从滚子向上）
+        # 画Follower杆（从滚子向上）
         pen_foll = QtGui.QPen(QtCore.Qt.black, 2)
         painter.setPen(pen_foll)
         top_y = y0 + self.MARGIN
@@ -404,9 +436,9 @@ class CamPreviewWidget(QtWidgets.QWidget):
         font.setPointSize(9)
         painter.setFont(font)
         painter.drawText(10, self.height() - 10,
-                         f"位置: {self._cam_angle:.0f}° ({frac * L:.1f} mm)")
+                         tr("Pos:") + f" {self._cam_angle:.0f}° ({frac * L:.1f} mm)")
 
-        # ── 压力角文字 ──
+        # ── Pressure Angle文字 ──
         pa = self._calc_pressure_angle()
         if pa is not None:
             if pa <= 20:
@@ -423,82 +455,47 @@ class CamPreviewWidget(QtWidgets.QWidget):
             painter.drawText(10, 20, f"α = {pa:.1f}°")
 
     def _calc_pressure_angle(self):
-        """计算当前凸轮角度下的压力角。"""
+        """计算当前凸轮角度下的Pressure Angle。"""
         if not self._cam or not self._follower or not self._roller_pos:
             return None
+        n = len(self._pitch_curve)
+        if n < 2:
+            return None
 
-        # ── 线性/圆柱凸轮：α = atan(dh/dx) ──
-        if self._cam.cam_type in ("linear", "cylindrical"):
-            n = len(self._pitch_curve)
-            if n < 2:
-                return None
+        cam_type = self._cam.cam_type
+        R = self._cam.base_radius
+        ft = self._follower.follower_type
+
+        if cam_type in ("linear", "cylindrical"):
             idx = int((self._cam_angle / 360.0) * n) % n
             idx_next = (idx + 1) % n
             dx = self._pitch_curve[idx_next][0] - self._pitch_curve[idx][0]
             dh = self._pitch_curve[idx_next][1] - self._pitch_curve[idx][1]
-            if abs(dx) < 1e-12:
-                return 0.0
-            return math.degrees(math.atan2(abs(dh), abs(dx)))
+            dtheta = dx / R if R > 1e-12 else 1.0
+            dh_dtheta = dh / dtheta if abs(dtheta) > 1e-12 else 0.0
+            return pressure_angle_linear_cyl(R, dh_dtheta)
 
-        # ── 盘形凸轮 ──
+        # ── Disk Cam ──
         rb = self._cam.base_radius
-        rx, ry = self._roller_pos
-        r_dist = math.sqrt(rx**2 + ry**2)
-        if r_dist < 1e-6:
-            return None
+        idx = int((-self._cam_angle / 360.0) * n) % n
+        idx_next = (idx + 1) % n
+        r0 = math.sqrt(self._pitch_curve[idx][0]**2 + self._pitch_curve[idx][1]**2)
+        r1 = math.sqrt(self._pitch_curve[idx_next][0]**2 + self._pitch_curve[idx_next][1]**2)
+        dr = r1 - r0
+        h = r0 - rb
+        dtheta = 2 * math.pi / n
+        dh_dtheta = dr / dtheta
 
-        ft = self._follower.follower_type
         if ft == FollowerType.TRANSLATING_ONCENTER:
-            # 对心直动：压力角 = atan(dh/dθ / (rb+h))
-            n = len(self._pitch_curve)
-            if n < 2:
-                return None
-            idx = int((-self._cam_angle / 360.0) * n) % n
-            idx_next = (idx + 1) % n
-            r0 = math.sqrt(self._pitch_curve[idx][0]**2 + self._pitch_curve[idx][1]**2)
-            r1 = math.sqrt(self._pitch_curve[idx_next][0]**2 + self._pitch_curve[idx_next][1]**2)
-            dr = r1 - r0
-            dtheta = 2 * math.pi / n
-            pa = math.degrees(math.atan2(abs(dr), r0 * dtheta))
-            return pa
+            return pressure_angle_oncenter(rb, h, dh_dtheta)
 
         elif ft == FollowerType.TRANSLATING_OFFCENTER:
-            # 偏置直动
             e = self._follower.offset
-            if r_dist <= abs(e):
-                return None
-            d = math.sqrt(r_dist**2 - e**2)
-            n = len(self._pitch_curve)
-            if n < 2:
-                return None
-            idx = int((-self._cam_angle / 360.0) * n) % n
-            idx_next = (idx + 1) % n
-            r0 = math.sqrt(self._pitch_curve[idx][0]**2 + self._pitch_curve[idx][1]**2)
-            r1 = math.sqrt(self._pitch_curve[idx_next][0]**2 + self._pitch_curve[idx_next][1]**2)
-            dr = r1 - r0
-            dtheta = 2 * math.pi / n
-            pa = math.degrees(math.atan2(abs(dr), d * dtheta))
-            return pa
+            return pressure_angle_offcenter(rb, h, e, dh_dtheta)
 
         elif ft == FollowerType.OSCILLATING:
-            # 摆动：压力角 = 滚子法线与臂法线的夹角
-            px, py = self._pivot_pos
-            arm_dx = rx - px
-            arm_dy = ry - py
-            arm_len = math.sqrt(arm_dx**2 + arm_dy**2)
-            if arm_len < 1e-6:
-                return None
-            # 臂法线方向（垂直于臂）
-            arm_nx = -arm_dy / arm_len
-            arm_ny = arm_dx / arm_len
-            # 凸轮法线方向（从中心到滚子）
-            cam_nx = rx / r_dist
-            cam_ny = ry / r_dist
-            # 压力角 = 两法线夹角
-            dot = arm_nx * cam_nx + arm_ny * cam_ny
-            dot = max(-1.0, min(1.0, dot))
-            pa = math.degrees(math.acos(abs(dot)))
-            return pa
+            L = self._follower.arm_length
+            return pressure_angle_oscillating(rb, h, L, dh_dtheta)
 
         return None
 

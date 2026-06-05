@@ -1,51 +1,49 @@
-"""凸轮从动件几何类型和运动段定义。"""
+"""Cam follower geometry types and motion segment definitions."""
 
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 
 class FollowerType(Enum):
     TRANSLATING_ONCENTER = "translating_oncenter"
     TRANSLATING_OFFCENTER = "translating_offcenter"
     OSCILLATING = "oscillating"
-    DOUBLE = "double"
-    CONJUGATE = "conjugate"
 
 
 @dataclass
 class MotionSegment:
-    """一段运动区间（可有任意多段）。"""
-    start_angle: float = 0.0      # 起始角 (°)
-    end_angle: float = 120.0      # 终止角 (°)
-    start_lift: float = 0.0       # 起始升程 (mm)
-    end_lift: float = 20.0        # 终止升程 (mm)
-    motion_name: str = "摆线运动"  # 运动规律（中文名）
+    """A motion segment with angle range and lift profile."""
+    start_angle: float = 0.0      # Start angle (°)
+    end_angle: float = 120.0      # End angle (°)
+    start_lift: float = 0.0       # Start lift (mm)
+    end_lift: float = 20.0        # End lift (mm)
+    motion_name: str = "Cycloidal"
 
     def __post_init__(self):
         if self.end_angle < self.start_angle:
             raise ValueError(
-                f"终止角 ({self.end_angle}°) 不能小于起始角 ({self.start_angle}°)")
+                f"End angle ({self.end_angle}°) cannot be less than start angle ({self.start_angle}°)")
         if self.start_angle < 0 or self.end_angle > 360:
             raise ValueError(
-                f"角度范围应在 0~360°（当前 {self.start_angle}°~{self.end_angle}°）")
+                f"Angle range must be within 0~360° (got {self.start_angle}°~{self.end_angle}°)")
+
+
+def get_roller_radius(grooved: bool, groove_width: float, default: float = 3.0) -> float:
+    """Unified roller radius: grooved = groove_width/2, non-grooved = default."""
+    return groove_width / 2.0 if grooved else default
 
 
 @dataclass
 class FollowerParams:
     """从动件参数。"""
     follower_type: FollowerType = FollowerType.TRANSLATING_ONCENTER
-    roller_radius: float = 5.0
+    roller_radius: float = 3.0
     offset: float = 0.0
     arm_length: float = 40.0
     pivot_x: float = 60.0
     pivot_y: float = 0.0
     initial_angle: float = 151.0
-    phase_offset: float = 180.0
-    follower2_roller_radius: float = 5.0
-    follower2_offset: float = 0.0
-    conjugate_roller_radius: float = 5.0
     color: tuple[float, float, float] = (0.8, 0.2, 0.2)
 
 
@@ -55,8 +53,8 @@ class CamParams:
     cam_type: str = "disk"
     base_radius: float = 30.0
     thickness: float = 15.0
-    hub_radius: float = 12.0
-    hub_length: float = 10.0
+    hub_radius: float = 0.0
+    hub_length: float = 0.0
     keyway_width: float = 4.0
     keyway_depth: float = 3.0
     bore_radius: float = 8.0

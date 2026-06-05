@@ -3,6 +3,7 @@
 import os
 import FreeCAD as App
 import FreeCADGui as Gui
+from ...i18n import tr
 
 
 def _icon(name):
@@ -15,15 +16,15 @@ class NewCamDesignCommand:
 
     def GetResources(self):
         return {
-            "MenuText": "新建凸轮设计",
-            "ToolTip": "新建凸轮设计文档",
+            "MenuText": tr("New Cam Design"),
+            "ToolTip": tr("Create new cam design document"),
             "Pixmap": _icon("new_design.svg"),
         }
 
     def Activated(self):
         doc = App.newDocument("CamDesign")
         App.setActiveDocument(doc.Name)
-        App.Console.PrintMessage("FCCamTrax: 已创建新凸轮设计文档。\n")
+        App.Console.PrintMessage("FCCamTrax: " + tr("New cam design document created.") + "\n")
 
     def IsActive(self):
         return True

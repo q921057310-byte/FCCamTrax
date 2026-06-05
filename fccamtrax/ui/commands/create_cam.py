@@ -3,6 +3,7 @@
 import os
 import FreeCAD as App
 import FreeCADGui as Gui
+from ...i18n import tr
 
 
 def _icon(name):
@@ -15,8 +16,8 @@ class CreateCamCommand:
 
     def GetResources(self):
         return {
-            "MenuText": "创建凸轮",
-            "ToolTip": "打开凸轮参数编辑面板",
+            "MenuText": tr("Create Cam"),
+            "ToolTip": tr("Open cam parameter editor"),
             "Pixmap": _icon("create_cam.svg"),
         }
 

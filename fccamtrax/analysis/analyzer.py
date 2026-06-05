@@ -1,12 +1,12 @@
-"""凸轮分析模块。"""
+"""Cam Analysis模块。"""
 
 from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from ..motion.registry import get as get_motion
 from ..geometry.follower import CamParams, FollowerParams, FollowerType
 from ..geometry.base import CamBuilder
+from ..geometry.utils import pressure_angle_oncenter
 
 
 @dataclass
@@ -32,6 +32,7 @@ class CamAnalyst:
     YOUNGS_MODULUS = 210000   # MPa (钢)
     POISSON_RATIO = 0.3
     CONTACT_WIDTH = 10.0      # mm — 凸轮厚度（接触宽度）
+    FOLLOWER_MASS = 1.0       # kg — Follower质量（用于惯性力）
 
     @staticmethod
     def analyze(cam_params: CamParams, follower_params: FollowerParams) -> AnalysisResult:
@@ -45,7 +46,7 @@ class CamAnalyst:
 
         result.displacement = lifts
 
-        # 速度、加速度、跃度（数值微分，dθ in rad）
+        # Velocity、Acceleration、Jerk（数值微分，dθ in rad）
         dtheta = 2 * math.pi / n_points
         for i in range(n_points):
             idx_prev = (i - 1) % n_points
@@ -65,21 +66,20 @@ class CamAnalyst:
             j = (result.acceleration[idx_next] - result.acceleration[idx_prev]) / (2 * dtheta)
             result.jerk.append(j)
 
-        # 压力角
+        # Pressure Angle
         result.pressure_angle = builder.pressure_angles()
-        # 如果 builder 没实现，用通用公式
+        # 如果 builder 没实现，用通用公式（Translating On-center）
         if not result.pressure_angle:
             rb = cam_params.base_radius
             for i, h in enumerate(lifts):
                 idx_next = (i + 1) % n_points
                 dh = (lifts[idx_next] - lifts[i]) / dtheta
-                denom = max(rb + h, 1e-6)
-                result.pressure_angle.append(math.degrees(math.atan2(abs(dh), denom)))
+                result.pressure_angle.append(pressure_angle_oncenter(rb, h, dh))
 
-        # 曲率半径
+        # Curvature Radius
         result.curvature = builder.curvature_radii()
 
-        # 法向力、扭矩、接触应力
+        # Normal Force、Torque、Contact Stress
         omega = CamAnalyst.CAM_SPEED * 2 * math.pi / 60  # rad/s
         F_spring = CamAnalyst.SPRING_FORCE
         rb = cam_params.base_radius
@@ -90,21 +90,23 @@ class CamAnalyst:
             alpha_rad = math.radians(result.pressure_angle[i]) if i < len(result.pressure_angle) else 0.0
             acc_i = result.acceleration[i] if i < len(result.acceleration) else 0.0
 
-            # 从动件惯性力 (简化: F_inertial = m * a * ω², 假设 m=1kg)
-            F_inertial = abs(acc_i) * omega * omega * 0.001  # 转换单位
-            # 法向力
+            # Follower惯性力: F_inertial = m * a (mm/s²) / 1000 (→m/s²)
+            # acc_i 是 d²h/dθ² (mm/rad²), a_actual = acc_i * ω² (mm/s²)
+            F_inertial = CamAnalyst.FOLLOWER_MASS * abs(acc_i) * omega * omega / 1000.0
+            # Normal Force
             F_normal = (F_spring + F_inertial) / max(math.cos(alpha_rad), 0.01)
             result.normal_force.append(F_normal)
 
-            # 扭矩
+            # Torque
             torque = F_normal * abs(math.sin(alpha_rad)) * (rb + h)
             result.torque.append(torque)
 
-            # 接触应力 (Hertz 线接触)
+            # Contact Stress (Hertz 线接触)
             curvature_radius = result.curvature[i] if i < len(result.curvature) else float('inf')
-            if curvature_radius > 0 and math.isfinite(curvature_radius) and roller_r > 0:
+            if math.isfinite(curvature_radius) and abs(curvature_radius) > 1e-12 and roller_r > 0:
                 E_star = CamAnalyst.YOUNGS_MODULUS / (1 - CamAnalyst.POISSON_RATIO**2)
-                rho_eq = 1.0 / (1.0/curvature_radius + 1.0/roller_r) if roller_r > 0 else curvature_radius
+                cr_abs = abs(curvature_radius)
+                rho_eq = 1.0 / (1.0/cr_abs + 1.0/roller_r)
                 if rho_eq > 0:
                     q = F_normal / CamAnalyst.CONTACT_WIDTH
                     sigma = math.sqrt(q * E_star / (math.pi * rho_eq))

@@ -1,4 +1,4 @@
-"""凸轮几何构建器基类和工厂。"""
+"""Cam geometry builder base class and factory."""
 
 from __future__ import annotations
 import math
@@ -7,17 +7,7 @@ from abc import ABC, abstractmethod
 from ..motion.registry import get as get_motion
 from .follower import CamParams, FollowerParams, MotionSegment
 
-# 运动规律中英文双向映射
-_MOTION_CN: dict[str, str] = {
-    "Cycloidal": "摆线运动",
-    "Harmonic": "简谐运动",
-    "Modified Sine": "修正正弦",
-    "3-4-5 Polynomial": "3-4-5 多项式",
-    "Constant Velocity": "等速运动",
-}
-_MOTION_EN: dict[str, str] = {v: k for k, v in _MOTION_CN.items()}
-
-# 段间过渡角度（°），在此范围内用 Hermite 匹配升程+速度
+# Motion segment transition zone (degrees), within which Hermite C2 blending is applied
 _TRANSITION_DEG = 5.0
 
 
@@ -93,6 +83,8 @@ class CamBuilder(ABC):
     def _lift_at(self, theta: float, segments: list[MotionSegment]) -> float:
         """计算角度 θ 处的升程，段间统一 C2 过渡。"""
         theta = theta % 360.0
+        if theta < 1e-12:
+            theta = 360.0
         n = len(segments)
         if n == 0:
             return 0.0
@@ -141,16 +133,12 @@ class CamBuilder(ABC):
         if seg_len <= 0:
             return seg.end_lift, 0.0, 0.0
         t = max(0.0, min(1.0, (theta - seg.start_angle) / seg_len))
-        try:
-            name = _MOTION_EN.get(seg.motion_name, seg.motion_name)
-            motion = get_motion(name)
-            s = motion.displacement(t)
-            v = motion.velocity(t)
-            a = motion.acceleration(t)
-        except (KeyError, ValueError):
-            s = t
-            v = 1.0
-            a = 0.0
+        motion = get_motion(seg.motion_name)
+        if motion is None:
+            raise ValueError(f"未知运动规律: {seg.motion_name}")
+        s = motion.displacement(t)
+        v = motion.velocity(t)
+        a = motion.acceleration(t)
         lift_range = seg.end_lift - seg.start_lift
         lift = seg.start_lift + s * lift_range
         vel = v * lift_range / seg_len

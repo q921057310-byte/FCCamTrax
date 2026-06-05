@@ -1,4 +1,4 @@
-"""内嵌图表组件，用于凸轮分析数据可视化。
+"""内嵌图表组件，用于Cam Analysis数据可视化。
 
 使用 QPainter 手绘，不依赖 QtCharts。
 兼容 PySide6 / PySide2 / PyQt6 / PyQt5。
@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 
 from ..analysis.analyzer import AnalysisResult
+from ..i18n import tr
 
 QtWidgets = QtCore = QtGui = None
 QT_LIB = None
@@ -123,14 +124,14 @@ class _PlotWidget(QtWidgets.QWidget):
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(self.MARGIN_LEFT, 4, self.width() - self.MARGIN_LEFT - self.MARGIN_RIGHT, 16,
-                         QtCore.Qt.AlignCenter, self._title)
+                         QtCore.Qt.AlignCenter, tr(self._title))
 
         # X axis label
         font.setPointSize(8)
         font.setBold(False)
         painter.setFont(font)
         painter.drawText(x0, y0 + h + 28, w, 20,
-                         QtCore.Qt.AlignCenter, "凸轮转角 (°)")
+                         QtCore.Qt.AlignCenter, tr("Cam Angle (°)"))
 
         # Y axis label
         painter.save()
@@ -194,18 +195,18 @@ class _PlotWidget(QtWidgets.QWidget):
 
 
 class CamChartWidget(QtWidgets.QWidget):
-    """多标签页分析图表容器。"""
+    """多标签页Analysis Charts容器。"""
 
     CHART_CONFIGS = [
-        ("位移", "displacement", "mm", (0, 100, 200)),
-        ("速度", "velocity", "mm/rad", (50, 100, 200)),
-        ("加速度", "acceleration", "mm/rad²", (200, 50, 50)),
-        ("跃度", "jerk", "mm/rad³", (150, 100, 50)),
-        ("压力角", "pressure_angle", "°", (100, 150, 50)),
-        ("扭矩", "torque", "N·mm", (50, 150, 100)),
-        ("接触应力", "contact_stress", "MPa", (150, 50, 150)),
-        ("法向力", "normal_force", "N", (50, 50, 150)),
-        ("曲率半径", "curvature", "mm", (100, 100, 100)),
+        ("Displacement", "displacement", "mm", (0, 100, 200)),
+        ("Velocity", "velocity", "mm/rad", (50, 100, 200)),
+        ("Acceleration", "acceleration", "mm/rad²", (200, 50, 50)),
+        ("Jerk", "jerk", "mm/rad³", (150, 100, 50)),
+        ("Pressure Angle", "pressure_angle", "°", (100, 150, 50)),
+        ("Torque", "torque", "N·mm", (50, 150, 100)),
+        ("Contact Stress", "contact_stress", "MPa", (150, 50, 150)),
+        ("Normal Force", "normal_force", "N", (50, 50, 150)),
+        ("Curvature Radius", "curvature", "mm", (100, 100, 100)),
     ]
 
     def __init__(self, parent=None):
@@ -220,7 +221,7 @@ class CamChartWidget(QtWidgets.QWidget):
         self._plot_widgets: dict[str, _PlotWidget] = {}
         for title, attr, unit, color in self.CHART_CONFIGS:
             pw = _PlotWidget(title, unit, color)
-            self._tabs.addTab(pw, title)
+            self._tabs.addTab(pw, tr(title))
             self._plot_widgets[attr] = pw
 
     def set_data(self, result):
@@ -237,10 +238,10 @@ class CamChartWidget(QtWidgets.QWidget):
 
 
 class CamAnalysisPanel(QtWidgets.QDockWidget):
-    """可停靠的分析图表面板。"""
+    """可停靠的Analysis Charts面板。"""
 
     def __init__(self, parent=None):
-        super().__init__("凸轮分析", parent)
+        super().__init__(tr("Cam Analysis"), parent)
         self.chart_widget = CamChartWidget()
         self.setWidget(self.chart_widget)
         self.setMinimumSize(850, 650)

@@ -9,73 +9,29 @@ def polar_to_cartesian(r: float, theta: float) -> tuple[float, float]:
     return r * math.cos(theta), r * math.sin(theta)
 
 
-def offset_curve(points: list[tuple[float, float]],
-                 offset: float,
-                 closed: bool = True) -> list[tuple[float, float]]:
-    """Offset a 2D curve by a fixed distance (positive = outward).
-
-    Computes offset normals at each point using neighboring points.
-    """
-    n = len(points)
-    if n < 2:
-        return points[:]
-
-    result = []
-    for i in range(n):
-        # Tangent from neighbors
-        if closed:
-            prev = points[(i - 1) % n]
-            next_pt = points[(i + 1) % n]
-        else:
-            prev = points[max(0, i - 1)]
-            next_pt = points[min(n - 1, i + 1)]
-
-        dx = next_pt[0] - prev[0]
-        dy = next_pt[1] - prev[1]
-        length = math.sqrt(dx*dx + dy*dy)
-        if length < 1e-12:
-            result.append(points[i])
-            continue
-
-        # Normal (perpendicular to tangent, rotated 90° CCW)
-        nx = -dy / length
-        ny = dx / length
-
-        result.append((
-            points[i][0] + offset * nx,
-            points[i][1] + offset * ny
-        ))
-
-    return result
+def pressure_angle_oncenter(rb: float, h: float, dh_dtheta: float) -> float:
+    """On-center translating: α = atan(|dh/dθ| / (rb+h))."""
+    denom = max(rb + h, 1e-12)
+    return math.degrees(math.atan2(abs(dh_dtheta), denom))
 
 
-def compute_curvature(points: list[tuple[float, float]]) -> list[float]:
-    """Compute signed curvature at each point of a 2D curve.
+def pressure_angle_offcenter(rb: float, h: float, e: float, dh_dtheta: float) -> float:
+    """Off-center translating: α = atan(|dh/dθ| / sqrt((rb+h)² - e²))."""
+    r_pitch = rb + h
+    denom = math.sqrt(max(r_pitch * r_pitch - e * e, 1e-12))
+    return math.degrees(math.atan2(abs(dh_dtheta), denom))
 
-    Uses Menger curvature: κ = 2·|cross| / (|p0p1|·|p1p2|·|p0p2|)
-    Positive = CCW, Negative = CW.
-    """
-    n = len(points)
-    curvatures = []
-    for i in range(n):
-        p0 = points[(i - 1) % n]
-        p1 = points[i]
-        p2 = points[(i + 1) % n]
 
-        dx1 = p1[0] - p0[0]
-        dy1 = p1[1] - p0[1]
-        dx2 = p2[0] - p1[0]
-        dy2 = p2[1] - p1[1]
+def pressure_angle_oscillating(rb: float, h: float, L: float, dh_dtheta: float) -> float:
+    """Oscillating: α = atan(|L·dψ/dθ| / (rb+h)) where dψ/dθ = (1/L)·dh/dθ."""
+    if L < 1e-12:
+        return 90.0
+    denom = max(rb + h, 1e-12)
+    dpsi_dtheta = dh_dtheta / L
+    return math.degrees(math.atan2(abs(L * dpsi_dtheta), denom))
 
-        cross = dx1 * dy2 - dy1 * dx2
-        ds1 = math.sqrt(dx1*dx1 + dy1*dy1)
-        ds2 = math.sqrt(dx2*dx2 + dy2*dy2)
-        ds3 = math.sqrt((p2[0]-p0[0])**2 + (p2[1]-p0[1])**2)
 
-        denom = ds1 * ds2 * ds3
-        if denom < 1e-12:
-            curvatures.append(0.0)
-        else:
-            curvatures.append(2.0 * cross / denom)
-
-    return curvatures
+def pressure_angle_linear_cyl(R: float, dh_dtheta: float) -> float:
+    """Linear/cylindrical: α = atan(|dh/dθ| / R)."""
+    denom = max(R, 1e-12)
+    return math.degrees(math.atan2(abs(dh_dtheta), denom))

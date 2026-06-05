@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import FreeCAD as App
 import Part
-from .base import CamBuilder, CamBuilderFactory
+from .base import CamBuilder
 from .follower import CamParams, FollowerParams
 
 
